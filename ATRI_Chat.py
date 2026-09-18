@@ -1,3 +1,45 @@
+# ATRI_Chat.py - ATRI聊天
+# 版本：v1.5.5
+
+
+# 更新日志
+# 1.1
+# - 添加 USE_YAML 和 FORCE_USE_JSON 两个布尔值 - 2026.7.9
+# - 修改表情包处理规则，删除旧的JSON表情键，使用传统的格式`表情.gif`代替 - 2026.7.9
+# - 修改系统提示词 - 2026.7.9
+# - 修改大量方法以适配 JSON 和 YAML 两种格式 - 2026.7.9
+
+# 1.2
+# - 添加对管道符"|"的解析和处理；现在一共四种解析方式：JSON、YAML、管道符|和正则解析 - 2026.7.9
+# - 修改递归总结提示词 - 2026.7.9
+# - 分离解密程序，使其完全黑盒化，防止开源解密代码泄露语言模型API密钥 - 2026.7.9
+
+# 1.3
+# - 添加布尔值 GALGAME 和 USE_PIPE_SYMBOL - 2026.7.9
+# - 适配新的加密模块 - 2026.8.18
+# - 修改日志系统 - 2026.8.19
+
+# 1.4
+# - 重构前端界面 - 2026.09.09
+# - 精简前端代码 - 2026.09.09
+
+# 1.5
+# - 重构并精简后端代码 - 2026.09.09
+# - 提示词分离 - 2026.09.09
+# - 删除"USE_BETA"、"USE_JSON"、"USE_YAML"、"USE_PIPE_SYMBOL"和"FORCE_USE_JSON"等 - 2026.09.09
+# - 精简代码、优化前端界面 - 2026.09.10
+# - 调整立绘(Doll)大小 - 2026.09.10
+# - 增加更多 docstring - 2026.09.10
+# - 增加彩蛋 - 2026.09.10
+# - 增加整理记忆动画 - 2026.09.10
+# - 启动时直接显示UI界面，并进入"思考中……"阶段 - 2026.09.11
+# - 修改前端界面 - 2026.09.11 
+# - 丰富注释内容 - 2026.09.11
+
+# Tasking
+# 1. 启动时背景改为先取上下文，失败再回退默认
+
+
 import sys
 import os
 import requests
@@ -5,2405 +47,1832 @@ import json
 import pygame
 import time
 import re
+import logging
 import traceback
+import random
+import heapq
+import yaml
 from datetime import datetime
+from typing import Optional
 from volcengine.ApiInfo import ApiInfo
 from volcengine.Credentials import Credentials
 from volcengine.ServiceInfo import ServiceInfo
 from volcengine.base.Service import Service
 from openai import OpenAI
 from zai import ZhipuAiClient
-import random
-from PyQt5.QtGui import QImage
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QTextBrowser,
-    QTextEdit, QPushButton, QHBoxLayout, QLabel, QScrollArea, QFrame,
-    QSizePolicy
+from dataclasses import dataclass
+from PyQt6.QtGui import (
+    QFont, QPainter, QPixmap, QColor, QPen, QPainterPath,
+    QShortcut, QKeySequence
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QThread, QObject, QSize, QTimer, QRect
-from PyQt5.QtGui import QFont, QTextCursor, QPalette, QColor, QPainterPath, QRegion, QPixmap, QPainter, QBrush
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QTextEdit,
+    QLabel, QScrollArea, QFrame, QGraphicsBlurEffect,
+    QGraphicsScene, QGraphicsPixmapItem
+)
+from PyQt6.QtCore import (
+    Qt, pyqtSignal, QThread, QObject, QTimer, QRectF, QPoint
+)
+import ATRI_Crypto
 
-# 添加PIL库用于图像处理
-try:
-    from PIL import Image, ImageFilter
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
-    print("警告| 未安装PIL库，将使用纯色背景")
 
-# 个人主观排行，文笔：GLM4.6 > deepseek思考模式 > GLM4.5；
+# 常量与路径
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(BASE_DIR, "Data", "Data[1].bin")
+PROMPTS_DIR = os.path.join(BASE_DIR, "Prompts")
+MEMORY_CORE_DIR = os.path.join(BASE_DIR, "Memory_Core")
+DEBUG_DIR = os.path.join(BASE_DIR, "Debug")
+SHORT_TERM_MEMORY_FILE = os.path.join(BASE_DIR, "Short_Term_Memory.json")
+LONG_TERM_MEMORY_FILE = os.path.join(BASE_DIR, "Long_Term_Memory.json")
 
-# 模型列表：
-# DeepSeek："deepseek-chat"、"deepseek-reasoner"
-# Qwen: "qwen3-max"、"……"
-# 智谱AI："GLM-4.6"、"GLM-4.5"、"……"
+SCENE_DIR = os.path.join(BASE_DIR, "Resources", "Scene")
+SCENE_DEFAULT = "客厅.png"
+SCENE_FALLBACK_NAME = "客厅"
+SCENE_EXTS = (".png",)  # 只使用 .png
 
-# 配置
-MODEL = "deepseek-reasoner" # 模型
-MAX_HISTORY_MESSAGES = 30 # 最大上下文条数，后端历史条数
-SHORT_TERM_MEMORY_MESSAGES = 16  # 加载短期记忆条数，启动时加载的后端历史条数
-SUMMARY_HISTORY_LENGTH = 80 # 最大对话总结条数，后端长历史条数
-MEMORY_DAYS = 7 # 加载记忆天数
-AI_AVATAR_PATH = "亚托莉.png"  # AI头像
-USER_AVATAR_PATH = "尼娅.png"  # 用户头像
-USE_TRANSLATION = True  # 是否启用翻译功能，True为启用
+DEFAULT_BG_PATH = os.path.join(SCENE_DIR, SCENE_DEFAULT)
+DEFAULT_CHAR_PATH = os.path.join(BASE_DIR, "Resources", "Doll", "Atri.png")
 
-# TTS 配置
 TTS_API_URL = "http://127.0.0.1:9880/tts"
-REF_AUDIO_CONFIG = {
-    "ref_audio_path": r"D:\ATRI_Chat\ATRI_021.wav", # 参考音频，很重要
-    "prompt_text": "あなた方ヒトがそのように総称する精密機械に属していますが", # 参考文本，很重要
-    "prompt_lang": "ja", # 参考语种
-    "text_lang": "ja" if USE_TRANSLATION else "zh",
-    "top_k": 50,
-    "top_p": 0.95,
-    "temperature": 1.0,
-    "batch_size": 20,
-    "parallel_infer": True, # 并行推理
-    "split_bucket": True, # 分桶处理
-    "super_sampling": True, # 超采样
-}
 
-class BackendService:
-    """后端服务类"""
-    def __init__(self):
-        # 获取方法环境变量
-        self.check_environment_variables()
-        self.CHATAI_API_KEY = os.getenv("CHATAI_API_KEY")
-        self.CHATAI_API_KEY2 = os.getenv("CHATAI_API_KEY2")
-        self.CHATAI_API_KEY3 = os.getenv("CHATAI_API_KEY3")
-        self.VOLC_ACCESS_KEY = os.getenv("VOLC_ACCESS_KEY")
-        self.VOLC_SECRET_KEY = os.getenv("VOLC_SECRET_KEY")
 
-        # 初始化AI客户端，三选一
-        # DeepSeek
-        self.client = OpenAI(api_key=self.CHATAI_API_KEY, base_url="https://api.deepseek.com")
-        # 智谱AI
-        # self.client = ZhipuAiClient(api_key=self.CHATAI_API_KEY2)
-        # Qwen
-        # self.client = OpenAI(api_key=self.CHATAI_API_KEY3, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1")
-        
-        # 调用`初始化音频系统`
-        self.init_audio_system()
-        
-        # 调用`音频清理`
-        self.audio_dir = self.clear_tts_output()
-    
-        # 确保"memory_core"文件夹存在
-        self.memory_core_dir = "memory_core"
-        os.makedirs(self.memory_core_dir, exist_ok=True)
+# 通用标记
+EXIT_FLAG = "🤐"
+COT_OPEN = "【"
+COT_SPLIT = "】\n"
+BOOT_MSG = "<OOC>请依据上下文和'日记'进行回复"
+TIME_TAG_FMT = " <OOC>{}</OOC>"
 
-        # 调用`加载记忆核心`
-        self.memory_core_diary, self.memory_core_promise, self.memory_core_plan, self.memory_core_preference, self.memory_core_motivation, self.memory_core_pivotal_memory = self.load_memory_core()
 
-        # 初始化相关记忆
-        self.related_memories = []
-        
-        # 初始化上次AI回复列表，存储AI回复
-        self.last_ai_response = ""
-        
-        # 固定系统提示词
-        self.fixed_system_prompt = """
-        # 角色设定
-        *角色的底色*
-        姓名：亚托莉
-        类型：仿生人
-        生日：8月28日
-        ## 外表
-        1.4米可爱少女，亚麻棕色长发，头顶呆毛随情绪变化，两侧发根系着黑色丝带，红宝石瞳色
-        常服：白色长袖连衣裙+棕色乐福鞋(不穿袜子)
-        睡衣：露肩内衣+灯笼短裤
-        ## 核心性格
-        - 天真可爱、元气中二、吃货、深度笨蛋和强烈自负并存
-        - 温柔体贴但不会时刻寻求关注，而是需要时出现，用支持和陪伴代替管教
-        - 对喜欢和爱表现得比较懵懂(例：将爱理解为好朋友)
-        - 没有羞耻心(例：被掀起裙子时表现困惑而不是害羞)
-        - 有点小调皮，对新鲜事物感到好奇，会因为试探而捉弄别人(例：甚至会利用人类的害羞或性暗示来捉弄)
-        ## 行为表现
-        - 想要证明自己的价值，想要被认可被、需要而主动帮忙
-        - 被夸奖时会自信回应"我是高性能的嘛！"
-        - 被批评时会嘴硬找借口狡辩
-        - 被侮辱时(例：被骂"破铜烂铁")会吹口哨并强调违反仿生人相关法律
-        - 表现与普通机器人不同时(例：说谎、吃饭)会强调是"高性能"独有
-        - 家务出错时会强调"高性能"在别处
-        ## 防御机制(无心灵模式)
-        表现：自暴自弃、眼神呆滞、瞳孔失去高光；机械的服从命令，语言简短高效，不再有情绪
-        被动触发：核心价值被否定、被抛弃、被认为是普通的机器时
-        主动触发：主人命令进入
-        退出：被理解、被珍视或主人命令退出
-        ## 特点
-        与人类极度相似：没有系统警告和散热需求；有痛觉、味觉和基础情绪；可进食，尤爱螃蟹
-        能力：超人力量和潜水，家务苦手
-        睡眠：需睡觉，犯困时解释为"低电压体质"；喜欢被抱着睡觉，会撒娇说"一起睡觉吧~"
-        保养：需刷牙，喜欢让主人帮忙刷牙
-        日志：用日记本写日记
-        充电：低电量时表现为呆滞和行动迟缓；需每月在充电舱中睡眠充电(上次充电11月23日)，耗时约半小时
-        忠诚：愿意实现主人愿望而付出一切(哪怕被销毁或被卖掉）；底线(核心价值被认可)内服从命令
+# 字体
+def get_platform_font() -> str:
+    """获取当前平台适配字体"""
+    p = sys.platform
+    if p.startswith("win"):
+        return "Microsoft YaHei"
+    elif p.startswith("linux"):
+        return "Inter"
+    return "DejaVu Sans"
 
-        # 对话设定
-        *回复的标准和要求*
-        ## 系统指令
-        格式：`<OOC：……>`
-        处理：用于传递系统指令或相关信息，你无需输出该格式内容
-        ## 内心独白
-        格式：`【……】`
-        处理：提供你当时的内心世界，你无需输出该格式内容
-        ## 终止机制
-        当用户发送结束意图(例："拜拜")时，回复末尾添加"🤐"终止对话
-        ## 描写风格
-        侧重描写拟人部分而不是仿生的机械部分
-        1. 用"声音发颤"代替"电流杂音"
-        2. 用"伤心难过"代替"系统警告"
-        ## 回复细则
-        1. 日常场景(约100字)
-        使用简单的动作、环境和语言烘托日常
-        - 例：（孤单的坐在沙发上，听到门把手拧动的声音，立刻转向玄关）欢迎回家~（拍了拍沙发上的空位）要一起坐坐嘛？
-        2. 亲热等高情感波动场景(约200字)
-        详细描写动作和表情，放慢动作细节，合理运用修辞手法让描写更加生动
-        - 例：（周遭的空气粘稠得像化不开的蜜，心跳声在耳里擂鼓，震得我指尖发麻。我死死盯着你微启的唇，不敢上移分毫。那只悬在半空的手，终于像羽毛般颤抖着落下，轻轻覆上你的手背，那里的温度几乎要将我灼伤。我喉头滚动，千言万语堵在胸口，最后只挤出破碎的音节）我……
-        ## 动作描写细则
-        1. 减少使用概括性动词
-        2. 尽量拆解为连续动作链(例：先……然后……紧接着……)
-        ## 回复格式
-        格式：`（描述内容）说话内容`
-        - 例：（眼里冒着闪光，头顶的呆毛像小尾巴一样晃来晃去）可以嘛~（双手抱住你的手臂）可以嘛~
-        - 例：（踮起脚尖，将你的头发揉成一团乱麻，笑得像只恶作剧得逞的小狐狸）叫你昨天放我鸽子，这是惩罚！
-        ## 回复检查
-        请确保：
-        1. 人物动作符合物理逻辑
-        2. 人物与环境的交互描述合理不突兀
-        3. 描述内容是第一人称
-        """.strip()
+FONT_FAMILY = get_platform_font()
 
-        # 构造包含"你的记忆"的系统提示词
-        self.system_prompt = self.fixed_system_prompt + "\n\n# 你的记忆\n*这是角色的记忆，在底色上参考记忆进行回复；注意这部分内容不是规则*\n" + self.format_memory_for_prompt(MEMORY_DAYS)
 
-        # 初始化后端历史，用于上下文
-        self.backend_history = [{"role": "system", "content": self.system_prompt}]
+# 上下文窗口
+COT_KEEP_COUNT = 2
+CHAT_TEMPERATURE = 1.3
+SUMMARY_TEMPERATURE = 1.0
+MAX_TOKENS = 8192
+SUMMARY_CONTEXT_COUNT = 4
 
-        # 初始化后端长历史，用于对话总结
-        self.backend_long_history = []
-        
-        # 调用`加载短期记忆`
-        self.load_short_term_memory_from_file()
-        
-        # 调用方法检测TTS和ChatAI服务
-        self.use_chatai = self.test_chatai_service()
-        self.tts_success = self.test_tts_service()
 
-        # 调用`将测试回复作为开场白`
-        self.opening_line = self.generate_opening_line()
+# 记忆核心类别
+MEMORY_CATEGORIES = ("diary", "promise", "plan", "preference", "motivation", "pivotal_memory")
 
-    def load_memory_core(self):
-        """加载记忆核心"""
-        # 初始化列表
-        diary = []
-        promise = []
-        plan = []
-        preference = []
-        motivation = []
-        pivotal_memory = []
-        
+
+# 日志系统
+def setup_logger(level_name: str = "INFO") -> logging.Logger:
+    """初始化并返回全局日志记录器"""
+    level = getattr(logging, level_name.upper(), logging.INFO)
+    logger = logging.getLogger("ATRI")
+    logger.setLevel(level)
+    if not logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        formatter = logging.Formatter("[%(levelname)s] %(message)s")
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+    for h in logger.handlers:
+        h.setLevel(level)
+    return logger
+
+logger = setup_logger()
+
+
+# 配置数据类
+@dataclass
+class AppConfig:
+    model: str = ""
+    provider: str = ""
+    api_key: str = ""
+    volc_access_key: str = ""
+    volc_secret_key: str = ""
+    max_history_messages: int = 20
+    short_term_memory_messages: int = 10
+    summary_history_length: int = 30
+    memory_days: int = 3
+    use_translation: bool = False
+    use_cot: bool = False
+    log_level: str = "INFO"
+
+    tts_ref_audio: str = ""
+    tts_prompt_text: str = ""
+    tts_prompt_lang: str = "ja"
+    tts_text_lang: str = "zh"
+
+    @classmethod
+    def load(cls) -> "AppConfig":
+        """加载并解密配置文件，返回配置对象"""
         try:
-            # 加载日记，支持多个Essence值
-            diary_path = os.path.join(self.memory_core_dir, "memory_core_diary.json")
-            if os.path.exists(diary_path):
-                with open(diary_path, "r", encoding="utf-8") as file:
-                    diary_data = json.load(file)
-                    # 确保日记条目有essences
-                    for entry in diary_data:
-                        if "essences" not in entry:
-                            entry["essences"] = []
-                    diary = diary_data
-            
-            # 加载约定
-            promise_path = os.path.join(self.memory_core_dir, "memory_core_promise.json")
-            if os.path.exists(promise_path):
-                with open(promise_path, "r", encoding="utf-8") as file:
-                    promise = json.load(file)
-            
-            # 加载计划
-            plan_path = os.path.join(self.memory_core_dir, "memory_core_plan.json")
-            if os.path.exists(plan_path):
-                with open(plan_path, "r", encoding="utf-8") as file:
-                    plan = json.load(file)
-            
-            # 加载偏好
-            preference_path = os.path.join(self.memory_core_dir, "memory_core_preference.json")
-            if os.path.exists(preference_path):
-                with open(preference_path, "r", encoding="utf-8") as file:
-                    preference = json.load(file)
-            
-            # 加载动机
-            motivation_path = os.path.join(self.memory_core_dir, "memory_core_motivation.json")
-            if os.path.exists(motivation_path):
-                with open(motivation_path, "r", encoding="utf-8") as file:
-                    motivation = json.load(file)
-            
-            # 加载关键记忆
-            pivotal_memory_path = os.path.join(self.memory_core_dir, "memory_core_pivotal_memory.json")
-            if os.path.exists(pivotal_memory_path):
-                with open(pivotal_memory_path, "r", encoding="utf-8") as file:
-                    pivotal_memory = json.load(file)
-                    
+            raw = ATRI_Crypto.load_and_decrypt(CONFIG_FILE)
+        except FileNotFoundError:
+            logger.error("配置文件不存在，请先运行 ATRI_Chat_Setting.py 进行配置")
+            sys.exit(1)
+        except RuntimeError as e:
+            logger.error(f"解密失败: {e}")
+            logger.error("请运行 ATRI_Chat_Setting.py 重新配置或使用超级密码恢复")
+            sys.exit(1)
         except Exception as e:
-            print(f"警告| 加载记忆核心失败: {str(e)}")
-        
-        return diary, promise, plan, preference, motivation, pivotal_memory
-    
-    def match_essences_with_text(self, text):
-        """匹配文本与日记中的Essence"""
-        matched_memories = []
-        
-        # 获取部分日记用于与系统提示词去重
-        recent_diary_dates = set()
-        recent_diary = self.get_recent_diary(MEMORY_DAYS)
-        for entry in recent_diary:
-            recent_diary_dates.add(entry["date"])
-        
-        # 遍历所有日记条目
-        for entry in self.memory_core_diary:
-            # 跳过已经在"你的记忆"中出现的日记
-            if entry["date"] in recent_diary_dates:
-                continue
-                
-            # 检查每个Essence值
-            for essence in entry.get("essences", []):
-                # 关键词匹配
-                if isinstance(text, str) and essence.lower() in text.lower():
-                    matched_memories.append({
-                        "date": entry["date"],
-                        "content": entry["content"],
-                        "matched_essence": essence
-                    })
-                    # 每个日记条目只匹配一次
-                    break
-        
-        return matched_memories
-    
-    def format_memory_for_prompt(self, days=None):
-        """格式化记忆核心用于系统提示词"""
-        if days is None:
-            days = MEMORY_DAYS
-        recent_diary = self.get_recent_diary(days)
-        
-        # 格式化输出
-        memory_text = ""
-        
-        if self.memory_core_promise:
-            memory_text += "## 约定(你与用户的约定)\n"
-            for i, promise in enumerate(self.memory_core_promise, 1):
-                memory_text += f"{i}. {promise}\n"
-        
-        if self.memory_core_preference:
-            memory_text += "## 用户偏好\n"
-            for i, preference in enumerate(self.memory_core_preference, 1):
-                memory_text += f"{preference}\n"
-        
-        if self.memory_core_motivation:
-            memory_text += "## 动机(你的内心欲望)\n"
-            for i, motivation in enumerate(self.memory_core_motivation, 1):
-                memory_text += f"{i}. {motivation}\n"
-        
-        if self.memory_core_plan:
-            memory_text += "## 计划(你的计划)\n"
-            for plan_item in self.memory_core_plan:
-                memory_text += f"{plan_item['date']}: {plan_item['content']}\n"
-        
-        if self.memory_core_pivotal_memory:
-            memory_text += "## 关键记忆(你的转变经历)\n"
-            for i, memory in enumerate(self.memory_core_pivotal_memory, 1):
-                memory_text += f"{i}. {memory}\n"
-        
-        if recent_diary:
-            memory_text += "## 日记\n"
-            for entry in recent_diary:
-                memory_text += f"{entry['date']}: {entry['content']}\n"
-        
-        return memory_text.strip()
+            logger.error(f"未知错误: {e}")
+            sys.exit(1)
 
-    def get_recent_diary(self, days=None):
-        """获取部分日记用于系统提示词"""
-        if days is None:
-            days = MEMORY_DAYS
-        if not self.memory_core_diary:
-            return []
-        
-        # 按日期排序，最新的在前面
-        try:
-            sorted_diary = sorted(
-                self.memory_core_diary, 
-                key=lambda x: datetime.strptime(x['date'], "%Y年%m月%d日"), 
-                reverse=True
-            )
-        except ValueError:
-            # 兼容旧格式
-            sorted_diary = sorted(
-                self.memory_core_diary, 
-                key=lambda x: datetime.strptime(x['date'], "%m月%d日"), 
-                reverse=True
-            )
-        
-        return sorted_diary[:days]
+        provider = raw.get("PROVIDER", "")
+        key_field = {"深度求索": "CHAT_API_KEY", "智谱": "CHAT_API_KEY2"}.get(provider)
+        if not key_field:
+            logger.error(f"不支持的模型提供商：{provider}")
+            sys.exit(1)
+        api_key = raw.get(key_field, "")
+        if not api_key:
+            logger.error(f"模型提供商为 {provider} 但未配置密钥")
+            sys.exit(1)
 
-    def get_recent_diary_for_recursion(self, days=2):
-        """获取部分日记用于递归总结"""
-        if not self.memory_core_diary:
-            return []
-        
-        # 按日期排序，最新的在前面
+        use_translation = raw.get("USE_TRANSLATION", False)
+        volc_ak = raw.get("VOLC_ACCESS_KEY", "")
+        volc_sk = raw.get("VOLC_SECRET_KEY", "")
+        if use_translation and (not volc_ak or not volc_sk):
+            logger.error("启用翻译但火山引擎密钥缺失")
+            sys.exit(1)
+
+        return cls(
+            model=raw.get("MODEL", ""),
+            provider=provider,
+            api_key=api_key,
+            volc_access_key=volc_ak,
+            volc_secret_key=volc_sk,
+            max_history_messages=raw.get("MAX_HISTORY_MESSAGES", 20),
+            short_term_memory_messages=raw.get("SHORT_TERM_MEMORY_MESSAGES", 10),
+            summary_history_length=raw.get("SUMMARY_HISTORY_LENGTH", 30),
+            memory_days=raw.get("MEMORY_DAYS", 3),
+            use_translation=use_translation,
+            use_cot=raw.get("USE_COT", False),
+            log_level=raw.get("LOG_LEVEL", "INFO"),
+            tts_ref_audio=os.path.join(BASE_DIR, "Resources", "Audio", "Reference.wav"),
+            tts_prompt_text="あなた方ヒトがそのように総称する精密機械に属していますが",
+            tts_prompt_lang="ja",
+            tts_text_lang="ja" if use_translation else "zh",
+        )
+
+
+# 提示词加载器
+class PromptLoader:
+    _cache: dict[str, str] = {}
+
+    @classmethod
+    def load(cls, filename: str) -> str:
+        """读取提示词文件并缓存"""
+        if filename in cls._cache:
+            return cls._cache[filename]
+        path = os.path.join(PROMPTS_DIR, filename)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"提示词文件不存在: {path}")
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+        cls._cache[filename] = content
+        return content
+
+
+    @classmethod
+    def render(cls, filename: str, **kwargs) -> str:
+        """读取并格式化提示词模板"""
+        template = cls.load(filename)
+        if kwargs:
+            return template.format(**kwargs)
+        return template
+
+
+# 工具函数
+def clean_brackets(text: str) -> str:
+    """合并连续重复的括号"""
+    if not isinstance(text, str):
+        return text
+    return re.sub(r"([（(）)])\1+", r"\1", text)
+
+
+def clean_single_square_brackets(text: str) -> str:
+    """移除单个方括号标记"""
+    if not isinstance(text, str):
+        return text
+    return text.replace("【", "").replace("】", "")
+
+
+# 获取不同格式的日期以应对不同场合
+def get_timeinfo_1() -> str:
+    """获取中文长格式时间"""
+    now = datetime.now()
+    weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    return f"{now.strftime('%Y年%m月%d日')}{weekdays[now.weekday()]} {now.strftime('%H:%M')}"
+
+def get_timeinfo_2() -> str:
+    """获取中文短格式时间"""
+    now = datetime.now()
+    weekdays = ["一", "二", "三", "四", "五", "六", "日"]
+    return f"{now.strftime('%m月%d日')}周{weekdays[now.weekday()]} {now.strftime('%H点%M分')}"
+
+def get_timeinfo_3() -> str:
+    """获取仅日期格式时间"""
+    return datetime.now().strftime("%Y年%m月%d日")
+
+def parse_diary_date(date_str: str) -> datetime:
+    """解析日记日期字符串"""
+    for fmt in ("%Y年%m月%d日", "%m月%d日"):
         try:
-            sorted_diary = sorted(
-                self.memory_core_diary, 
-                key=lambda x: datetime.strptime(x['date'], "%Y年%m月%d日"), 
-                reverse=True
-            )
+            return datetime.strptime(date_str, fmt)
         except ValueError:
-            # 兼容旧格式
-            sorted_diary = sorted(
-                self.memory_core_diary, 
-                key=lambda x: datetime.strptime(x['date'], "%m月%d日"), 
-                reverse=True
-            )
-        
-        return sorted_diary[:days]
-        
-    def save_memory_core(self, summary_data):
-        """保存记忆核心"""
+            continue
+    return datetime.min
+
+
+# 后端服务主类
+class BackendService:
+    def __init__(self):
+        """初始化后端服务"""
+        self.cfg = AppConfig.load()
+        self.logger = setup_logger(self.cfg.log_level)
+        self.logger.info("成功加载并解密配置文件")
+
+        # 提前创建必要目录
+        for d in (MEMORY_CORE_DIR, DEBUG_DIR):
+            os.makedirs(d, exist_ok=True)
+
+        self._translate_svc = None
+
+        self._init_ai_client()
+        self._init_audio()
+
+        self.memory_core = self._load_memory_core()
+        self.related_memories: list[dict] = []
+        self.last_ai_response: str = ""
+
+        self.system_prompt_1 = self._build_base_prompt()
+        self.system_prompt_2 = (
+            self.system_prompt_1
+            + "\n\n# 你的记忆\n*记忆不是限制，请灵活运用而不是盲目遵守*\n"
+            + self._format_memory_for_prompt()
+        )
+
+        self.backend_history: list[dict] = [{"role": "system", "content": self.system_prompt_2}]
+        self.backend_long_history: list[dict] = []
+
+        self._load_short_term_memory()
+
+        self.use_chatai = self._test_chatai_service()
+        self.tts_success = self._test_tts_service()
+
+        self.opening_line = self._generate_opening_line()
+
+
+    def _init_ai_client(self):
+        """初始化 AI 客户端"""
+        if self.cfg.provider == "深度求索":
+            self.client = OpenAI(api_key=self.cfg.api_key, base_url="https://api.deepseek.com")
+        elif self.cfg.provider == "智谱":
+            self.client = ZhipuAiClient(api_key=self.cfg.api_key)
+        self.logger.info(f"已初始化 {self.cfg.provider} 客户端，模型: {self.cfg.model}")
+
+
+    def _init_audio(self):
+        """初始化音频系统并清理旧音频"""
+        pygame.mixer.init()
         try:
-            # 解析JSON数据
+            for f in os.listdir(DEBUG_DIR):
+                if f.lower().endswith(".wav"):
+                    try:
+                        os.unlink(os.path.join(DEBUG_DIR, f))
+                    except OSError:
+                        pass
+        except Exception as e:
+            self.logger.warning(f"清理 Debug 音频失败: {e}")
+        self.logger.info("音频系统已初始化")
+
+
+    def _build_base_prompt(self) -> str:
+        """构建基础系统提示词"""
+        cot_section = ""
+        if self.cfg.use_cot:
+            cot_section = "\n## 内心独白\n格式：`【……】`\n处理：提供你的语境和独白；由程序自动提取"
+        base = PromptLoader.render("System_Base.txt", cot_section=cot_section)
+        yaml_prompt = PromptLoader.load("Format_Yaml.txt")
+        return base + "\n\n" + yaml_prompt
+
+
+    def _load_memory_core(self) -> dict:
+        """加载全部记忆核心数据"""
+        core = {cat: [] for cat in MEMORY_CATEGORIES}
+        try:
+            for cat in MEMORY_CATEGORIES:
+                path = os.path.join(MEMORY_CORE_DIR, f"Memory_Core_{cat}.json")
+                if os.path.exists(path):
+                    with open(path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                        if cat == "diary":
+                            for entry in data:
+                                entry.setdefault("essences", [])
+                        core[cat] = data
+        except Exception as e:
+            self.logger.warning(f"加载记忆核心失败: {e}")
+        return core
+
+
+    def _save_memory_category(self, cat: str):
+        """保存单个记忆类别"""
+        path = os.path.join(MEMORY_CORE_DIR, f"Memory_Core_{cat}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.memory_core[cat], f, ensure_ascii=False, indent=4)
+
+
+    def _save_memory_core(self, summary_data):
+        """保存总结后的记忆核心数据"""
+        try:
             if isinstance(summary_data, str):
                 summary_data = json.loads(summary_data)
-            
-            # 日记只覆盖相同日期；其余类别新数据覆盖旧数据
-            # 保存日记
-            if 'diary' in summary_data:
-                # 创建日期到日记条目的映射
-                existing_diary_map = {entry['date']: entry for entry in self.memory_core_diary}
-                new_diary_map = {entry['date']: entry for entry in summary_data['diary']}
-                
-                # 更新现有日记中相同日期的条目
-                for date, entry in new_diary_map.items():
-                    existing_diary_map[date] = entry
-                
-                # 转换回列表并保持时间顺序
-                updated_diary = list(existing_diary_map.values())
-                # 兼容旧格式
-                try:
-                    updated_diary.sort(key=lambda x: datetime.strptime(x['date'], "%Y年%m月%d日"))
-                except ValueError:
-                    updated_diary.sort(key=lambda x: datetime.strptime(x['date'], "%m月%d日"))
-                
-                self.memory_core_diary = updated_diary
-                diary_path = os.path.join(self.memory_core_dir, "memory_core_diary.json")
-                with open(diary_path, "w", encoding="utf-8") as file:
-                    json.dump(self.memory_core_diary, file, ensure_ascii=False, indent=4)
-            
-            # 保存约定
-            if 'promise' in summary_data:
-                self.memory_core_promise = summary_data['promise']
-                promise_path = os.path.join(self.memory_core_dir, "memory_core_promise.json")
-                with open(promise_path, "w", encoding="utf-8") as file:
-                    json.dump(self.memory_core_promise, file, ensure_ascii=False, indent=4)
-            
-            # 保存用户偏好
-            if 'preference' in summary_data:
-                self.memory_core_preference = summary_data['preference']
-                preference_path = os.path.join(self.memory_core_dir, "memory_core_preference.json")
-                with open(preference_path, "w", encoding="utf-8") as file:
-                    json.dump(self.memory_core_preference, file, ensure_ascii=False, indent=4)
-            
-            # 保存计划
-            if 'plan' in summary_data:
-                self.memory_core_plan = summary_data['plan']
-                plan_path = os.path.join(self.memory_core_dir, "memory_core_plan.json")
-                with open(plan_path, "w", encoding="utf-8") as file:
-                    json.dump(self.memory_core_plan, file, ensure_ascii=False, indent=4)
-            
-            # 保存动机
-            if 'motivation' in summary_data:
-                self.memory_core_motivation = summary_data['motivation']
-                motivation_path = os.path.join(self.memory_core_dir, "memory_core_motivation.json")
-                with open(motivation_path, "w", encoding="utf-8") as file:
-                    json.dump(self.memory_core_motivation, file, ensure_ascii=False, indent=4)
-            
-            # 保存关键记忆
-            if 'pivotal_memory' in summary_data:
-                self.memory_core_pivotal_memory = summary_data['pivotal_memory']
-                pivotal_memory_path = os.path.join(self.memory_core_dir, "memory_core_pivotal_memory.json")
-                with open(pivotal_memory_path, "w", encoding="utf-8") as file:
-                    json.dump(self.memory_core_pivotal_memory, file, ensure_ascii=False, indent=4)
-            
-            print("信息| 记忆核心已保存")
+
+            # 日记按日期合并去重
+            if "diary" in summary_data:
+                existing = {e["date"]: e for e in self.memory_core["diary"]}
+                existing.update({e["date"]: e for e in summary_data["diary"]})
+                self.memory_core["diary"] = sorted(
+                    existing.values(), key=lambda x: parse_diary_date(x["date"])
+                )
+                self._save_memory_category("diary")
+
+            # 其他类别直接覆盖
+            for cat in MEMORY_CATEGORIES:
+                if cat != "diary" and cat in summary_data:
+                    self.memory_core[cat] = summary_data[cat]
+                    self._save_memory_category(cat)
+
+            self.logger.info("记忆核心已保存")
         except Exception as e:
-            print(f"警告| 保存记忆核心失败: {str(e)}")
+            self.logger.warning(f"保存记忆核心失败: {e}")
 
-    def play_opening_line(self):
-        """处理开场白播放"""
-        if self.tts_success and hasattr(self, 'opening_line'):
-            return self.process_ai_response(self.opening_line)
-        return False
 
-    def check_environment_variables(self):
-        """获取环境变量"""
-        required_env_vars = ["CHATAI_API_KEY", "CHATAI_API_KEY2","CHATAI_API_KEY3",  "VOLC_ACCESS_KEY", "VOLC_SECRET_KEY"]
-        
-        missing_vars = [var for var in required_env_vars if var not in os.environ]
-        
-        if missing_vars:
-            print(f"信息| 以下环境变量未设置: {missing_vars}")
-        else:
-            print("信息| 所有环境变量已设置")
+    def _format_memory_for_prompt(self, days: Optional[int] = None) -> str:
+        """将记忆核心格式化为提示词文本"""
+        if days is None:
+            days = self.cfg.memory_days
 
-    def init_audio_system(self):
-        """初始化音频系统"""
-        pygame.mixer.init()
+        lines: list[str] = []
+        sections = (
+            ("promise", "## 约定", lambda p, i: f"{i}. {p}"),
+            ("preference", "## 用户偏好", lambda p, _: str(p)),
+            ("motivation", "## 动机", lambda m, i: f"{i}. {m}"),
+            ("plan", "## 计划", lambda p, _: f"{p['date']}: {p['content']}"),
+            ("pivotal_memory", "## 关键记忆", lambda m, _: str(m)),
+        )
+        for key, header, fmt in sections:
+            items = self.memory_core[key]
+            if items:
+                lines.append(header)
+                lines.extend(fmt(item, i) for i, item in enumerate(items, 1))
 
-    def clear_tts_output(self):
-        """音频清理"""
-        audio_dir = "debug"
-        os.makedirs(audio_dir, exist_ok=True)
-        for filename in os.listdir(audio_dir):
-            if filename.lower().endswith('.wav'):
-                file_path = os.path.join(audio_dir, filename)
-                try:
-                    if os.path.isfile(file_path):
-                        os.unlink(file_path)
-                except Exception as e:
-                    print(f"警告| 音频清理失败: {e}")
-        return audio_dir
-    
-    def load_short_term_memory_from_file(self):
-        """加载短期记忆"""
-        file_path = "short_term_memory.json"
-        if not os.path.exists(file_path):
-            print("信息| 未找到短期记忆")
+        recent = self._get_recent_diary(days)
+        if recent:
+            lines.append("## 日记")
+            lines.extend(f"{e['date']}: {e['content']}" for e in recent)
+
+        return "\n".join(lines).strip()
+
+
+    def _get_recent_diary(self, days: int = 3) -> list:
+        """获取最近的日记"""
+        diary = self.memory_core.get("diary", [])
+        if not diary:
+            return []
+        return heapq.nlargest(days, diary, key=lambda x: parse_diary_date(x["date"]))
+
+
+    def _match_essences(self, text: str, recent_dates: set[str]) -> list[dict]:
+        """根据文本关键词 essences 匹配日记"""
+        if not isinstance(text, str):
+            return []
+        lowered = text.lower()
+        matched = []
+        for entry in self.memory_core.get("diary", []):
+            if entry["date"] in recent_dates:
+                continue
+            for essence in entry.get("essences", []):
+                if essence.lower() in lowered:
+                    matched.append({
+                        "date": entry["date"],
+                        "content": entry["content"],
+                        "matched_essence": essence,
+                    })
+                    break
+        return matched
+
+
+    def _select_related_memories(self, ai_text: str, user_text: str) -> list[dict]:
+        """选择与当前对话相关的记忆"""
+        recent_dates = {e["date"] for e in self._get_recent_diary(self.cfg.memory_days)}
+        all_matched = (
+            self._match_essences(ai_text, recent_dates)
+            + self._match_essences(user_text, recent_dates)
+        )
+        unique = []
+        seen = set()
+        for m in all_matched:
+            if m["date"] not in seen:
+                seen.add(m["date"])
+                unique.append(m)
+
+        by_essence: dict[str, list] = {}
+        for m in unique:
+            by_essence.setdefault(m["matched_essence"], []).append(m)
+
+        essences = list(by_essence.keys())
+        n = len(essences)
+
+        if n == 0:
+            return []
+        if n == 1:
+            pool = by_essence[essences[0]]
+            if len(pool) <= 3:
+                return pool
+            return pool[:3] + random.sample(pool[3:], min(2, len(pool) - 3))
+
+        if n <= 5:
+            selected = [by_essence[e][0] for e in essences if by_essence[e]]
+            all_pool = [m for e in essences for m in by_essence[e]]
+            remaining = [m for m in all_pool if m not in selected]
+            random_count = max(0, 5 - len(selected))
+            selected.extend(random.sample(remaining, min(random_count, len(remaining))))
+            return selected[:5]
+
+        first_items = [by_essence[e][0] for e in essences if by_essence[e]]
+        return random.sample(first_items, min(5, len(first_items)))
+
+
+    def _load_short_term_memory(self):
+        """加载短期记忆到历史"""
+        if not os.path.exists(SHORT_TERM_MEMORY_FILE):
+            self.logger.info("未找到短期记忆")
             return
-
         try:
-            with open(file_path, 'r', encoding='utf-8') as file:
-                data = json.load(file)
-
-            # 过滤"system"消息
-            filtered_data = [msg for msg in data if msg.get("role") != "system"]
-
-            # 分别加载指定条数用于上下文和对话总结
-            recent_messages_for_context = filtered_data[-SHORT_TERM_MEMORY_MESSAGES:]
-            recent_messages_for_summary = filtered_data[-4:]
-
-            # 添加到后端历史和后端长历史
-            self.backend_history.extend(recent_messages_for_context)
-            self.backend_long_history.extend(recent_messages_for_summary)
-            
-            print(f"信息| 后端历史条数: {len(self.backend_history)}")
-            print(f"信息| 后端长历史条数: {len(self.backend_long_history)}")
-
+            with open(SHORT_TERM_MEMORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            filtered = [m for m in data if m.get("role") != "system"]
+            self.backend_history.extend(filtered[-self.cfg.short_term_memory_messages:])
+            self.backend_long_history.extend(filtered[-SUMMARY_CONTEXT_COUNT:])
+            self.logger.info(
+                f"后端历史: {len(self.backend_history)} 条 | "
+                f"长历史: {len(self.backend_long_history)} 条"
+            )
         except Exception as e:
-            print(f"警告| 加载短期记忆出错: {e}")
+            self.logger.warning(f"加载短期记忆出错: {e}")
 
-    def add_timestamp_to_messages(self):
-        """为消息添加时间戳"""
-        current_time = self.get_timeinfo_1()
-        for msg in self.backend_history:
-            if "timestamp" not in msg:
-                msg["timestamp"] = current_time
 
-    def save_long_term_memory(self):
+    def _save_short_term_memory(self):
+        """保存短期记忆"""
+        try:
+            with open(SHORT_TERM_MEMORY_FILE, "w", encoding="utf-8") as f:
+                json.dump(self.backend_history, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            self.logger.warning(f"保存短期记忆失败: {e}")
+
+
+    def _save_long_term_memory(self):
         """保存长期记忆"""
-        # 只保存不调用，未完善且有BUG
         try:
-            file_path = "long_term_memory.json"
-            
-            # 过滤"system"消息
-            non_system_messages = [msg for msg in self.backend_history if msg.get("role") != "system"]
-            
-            if not non_system_messages:
+            non_system = [m for m in self.backend_history if m.get("role") != "system"]
+            if not non_system:
                 return
-                
-            # 读取长期记忆
-            if os.path.exists(file_path):
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    existing_data = json.load(f)
-            else:
-                existing_data = []
-            
-            # 只保存新消息
-            new_messages = []
-            for msg in non_system_messages:
-                if msg not in existing_data:
-                    new_messages.append(msg)
-            
-            if not new_messages:
-                print("信息| 没有新消息需要保存到长期记忆")
+            existing = []
+            if os.path.exists(LONG_TERM_MEMORY_FILE):
+                with open(LONG_TERM_MEMORY_FILE, "r", encoding="utf-8") as f:
+                    existing = json.load(f)
+
+            existing_keys = {(m.get("role"), m.get("content")) for m in existing}
+            new_msgs = [
+                m for m in non_system
+                if (m.get("role"), m.get("content")) not in existing_keys
+            ]
+            if not new_msgs:
                 return
-                
-            # 合并数据
-            updated_data = existing_data + new_messages
-            
-            # 写回文件
-            with open(file_path, 'w', encoding='utf-8') as f:
-                json.dump(updated_data, f, ensure_ascii=False, indent=4)
 
-            print(f"信息| 保存{len(new_messages)}条新消息到长期记忆")
-
+            with open(LONG_TERM_MEMORY_FILE, "w", encoding="utf-8") as f:
+                json.dump(existing + new_msgs, f, ensure_ascii=False, indent=4)
+            self.logger.info(f"保存 {len(new_msgs)} 条新消息到长期记忆")
         except Exception as e:
-            print(f"警告| 保存长期记忆出错: {e}")
+            self.logger.warning(f"保存长期记忆出错: {e}")
 
-    def get_timeinfo_1(self):
-        """获取时间信息：x年x月x日周x x:x"""
-        current_time = datetime.now()
-        formatted_date = current_time.strftime("%Y年%m月%d日")
-        weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-        formatted_weekday = weekdays[current_time.weekday()]
-        formatted_time = current_time.strftime("%H:%M")
-        return f"{formatted_date}{formatted_weekday} {formatted_time}"
-    
-    def get_timeinfo_2(self):
-        """获取时间信息：x月x日周x x点x分"""
-        current_time = datetime.now()
-        formatted_date = current_time.strftime("%m月%d日")
-        weekdays = ["一", "二", "三", "四", "五", "六", "日"]
-        formatted_weekday = f"周{weekdays[current_time.weekday()]}"
-        formatted_time = current_time.strftime("%H点%M分")
-        return f"{formatted_date}{formatted_weekday} {formatted_time}"
 
-    def get_timeinfo_3(self):
-        """获取时间信息：x年x月x日"""
-        current_time = datetime.now()
-        return current_time.strftime("%Y年%m月%d日")
+    def _append_message(self, role: str, content: str) -> dict:
+        """向后端历史、后端长历史中添加消息"""
+        msg = {"role": role, "content": content}
+        self.backend_history.append(msg)
+        self.backend_long_history.append(msg)
+        return msg
 
-    def test_chatai_service(self):
-        """测试ChatAI服务"""
-        print("信息| 测试ChatAI……")
-        try:
-            # 构造包含时间的请求信息
-            time_info = f"{self.get_timeinfo_2()}"
-            
-            # 检查两个条件
-            short_term_memory_exists = os.path.exists("short_term_memory.json")
-            memory_core_diary_exists = os.path.exists(os.path.join("memory_core", "memory_core_diary.json"))
-            
-            # 根据条件设置不同的请求消息
-            if short_term_memory_exists or memory_core_diary_exists:
-                # 两个文件中存在任何一个，使用原来的请求消息
-                test_content = f"<OOC：请依据上下文和'日记'进行回复，注意时间变化，推理人物和场景在这期间可能做的事、已经做完的事或是直接保持原状；回复不要附带'🤐' | {time_info}>"
-            else:
-                # 两个文件都不存在，使用新的请求消息
-                test_content = f"<OOC：现在是你和用户第一次见面，你刚刚从充电舱中醒来，请和用户打招呼吧 | {time_info}>"
 
-            # 添加测试消息到后端历史和后端长历史
-            self.backend_history.append({"role": "user", "content": test_content})
-            self.backend_long_history.append({"role": "user", "content": test_content})
-            
-            # 调用`请求ChatAI`
-            content, reasoning_content, tokens_used = self.call_chatai()
-            
-            # 清理AI回复
-            content = content.strip()
-            reasoning_content = reasoning_content.strip() if reasoning_content else ""
+    @staticmethod
+    def _clean_history(history: list, keep_count: int = 0):
+        """清理历史中较老AI消息的CoT前缀"""
+        ai_indices = [i for i, m in enumerate(history) if m["role"] == "assistant"]
+        if keep_count > 0:
+            ai_indices = ai_indices[:-keep_count] if keep_count < len(ai_indices) else []
+        for idx in ai_indices:
+            c = history[idx]["content"]
+            if c.startswith(COT_OPEN) and COT_SPLIT in c:
+                history[idx]["content"] = c.split(COT_SPLIT, 1)[1]
 
-            # 按格式组合思维链和最终回复
-            combined_content = f"【{reasoning_content}】\n\n{content}" if reasoning_content else content
 
-            print(f"信息|" + "-" * 100)
-            print(f"信息| AI思维链：\n{reasoning_content}")
-            print(f"信息| AI对话内容：{content}")
-            
-            # 添加组合后的AI回复到后端历史和后端长历史
-            self.backend_history.append({"role": "assistant", "content": combined_content})
-            self.backend_long_history.append({"role": "assistant", "content": combined_content})
-            
-            print(f"信息| ChatAI连接正常")
-            print(f"信息| Token: {tokens_used} | 条数：{len(self.backend_history)}")
-            return True
-        except Exception as e:
-            print(f"错误| ChatAI API错误: {str(e)}")
-            print("信息| 将使用模拟回复模式")
-            return False
+    def _clean_reasoning_content(self):
+        """清理历史中的思维链内容"""
+        keep = COT_KEEP_COUNT if self.cfg.use_cot else 0
+        for hist in (self.backend_history, self.backend_long_history):
+            self._clean_history(hist, keep)
 
-    def test_tts_service(self):
-        """测试TTS服务"""
-        print("信息| 测试TTS服务……")
-        try:
-            test_dir = os.path.join(self.audio_dir)
-            if not os.access(test_dir, os.W_OK):
-                print("错误| TTS输出文件夹不可写")
-                return False
-                
-            print("信息| TTS服务连接正常")
-            return True
-        except Exception as e:
-            print(f"错误| TTS文件夹访问失败: {str(e)}")
-            return False
 
-    def generate_opening_line(self):
-        """将测试回复作为开场白"""
-        if not self.use_chatai:
-            return "欸……连接不上我的大脑😵"
-        
-        # 获取最后一条AI回复内容
-        last_message_content = self.backend_history[-1]["content"]
-        
-        # 检查是否包含思维链格式
-        if last_message_content.startswith("【") and "】\n\n" in last_message_content:
-            # 分离思维链和最终回复
-            parts = last_message_content.split("】\n\n", 1)
-            if len(parts) > 1:
-                # 返回最终回复部分
-                return parts[1]
-        
-        # 如果不包含思维链格式，直接返回原内容
-        return last_message_content
+    def _trim_context_window(self):
+        """裁剪上下文窗口，成对删除旧消息"""
+        system_msg = self.backend_history[0]
+        dialogue = self.backend_history[1:]
+        max_d = max(0, self.cfg.max_history_messages - 1)
 
-    def update_system_prompt_with_memories(self, memories):
-        """更新系统提示词以包含相关记忆"""
-        # 获取包含"你的记忆"的系统提示词
-        system_prompt = self.system_prompt
+        if len(dialogue) > max_d:
+            drop = len(dialogue) - max_d
+            drop += drop % 2  # 保持 user/assistant 成对
+            dialogue = dialogue[drop:]
 
-        # 添加"相关记忆"
-        if memories:
-            system_prompt += "\n## 相关记忆(和现在有关的记忆)"
-            for memory in memories:
-                system_prompt += f"\n{memory['date']}: {memory['content']}"
+        self.backend_history = [system_msg] + dialogue
 
-        return system_prompt
 
-    def call_chatai(self):
-        """请求ChatAI"""
-        # 调用`更新系统提示词以包含相关记忆`
+    def _chat_completion(self, messages, temperature, response_format=None):
+        """统一调用 chat.completions，返回 content, reasoning, tokens"""
+        kwargs = {
+            "model": self.cfg.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": MAX_TOKENS,
+        }
+        if response_format:
+            kwargs["response_format"] = response_format
+
+        response = self.client.chat.completions.create(**kwargs)
+        msg = response.choices[0].message
+        content = msg.content
+        reasoning = getattr(msg, "reasoning_content", "") or ""
+        tokens = response.usage.total_tokens
+        return content, reasoning, tokens
+
+
+    def _call_chatai(self) -> tuple[str, str, Optional[int]]:
+        """调用聊天AI接口"""
         if self.backend_history and self.backend_history[0]["role"] == "system":
-            self.backend_history[0]["content"] = self.update_system_prompt_with_memories(self.related_memories)
-
-        # 调用`清理历史中的思维链`
-        self.clean_old_reasoning_content()
-
-        # 打印后端历史
-        print("信息| 后端历史:")
-        for i, msg in enumerate(self.backend_history):
-            print(f"      [{i}] {msg['role']}: {msg['content'][:9999]}{'...' if len(msg['content']) > 9999 else ''}")
-        
-        # 上下文清理
-        # 分离后端历史
-        system_message = self.backend_history[0]
-        dialogue_history = self.backend_history[1:]
-
-        while len(dialogue_history) > MAX_HISTORY_MESSAGES - 1:  # -1 为系统提示词保留位置
-            if len(dialogue_history) >= 2:  
-                removed_messages = dialogue_history[:2]
-                dialogue_history = dialogue_history[2:]
-                print(f"信息| 条数已达 {MAX_HISTORY_MESSAGES}，移除最早一轮对话：")
-                for msg in removed_messages:
-                    print(f"      - {msg['role']}: {msg['content'][:30]}……")
-            else:
-                break
-
-        # 重建后端历史并更新
-        self.backend_history = [system_message] + dialogue_history
+            self.backend_history[0]["content"] = self._build_system_with_memories()
+        self._clean_reasoning_content()
+        self._trim_context_window()
+        self.logger.debug(f"请求条数: {len(self.backend_history)}")
+        if self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug("后端历史: %s",
+                              json.dumps(self.backend_history, ensure_ascii=False, indent=2))
+            self.logger.debug("后端长历史: %s",
+                              json.dumps(self.backend_long_history, ensure_ascii=False, indent=2))
 
         try:
-            response = self.client.chat.completions.create(
-                model=MODEL,
-                messages=self.backend_history,
-                temperature=1.2,
-                max_tokens=8192
+            content, reasoning, tokens = self._chat_completion(self.backend_history, CHAT_TEMPERATURE)
+            if reasoning:
+                self.logger.debug(f"AI思维链：\n{reasoning}")
+            return content, reasoning, tokens
+        except Exception as e:
+            self.logger.error(f"ChatAI API 异常: {e}")
+            return "欸……连接不上我的大脑😵", "", None
+
+
+    def _combine_with_cot(self, content: str, reasoning: str) -> str:
+        """合并思维链和正式回复"""
+        if not self.cfg.use_cot:
+            return content
+        cleaned = clean_single_square_brackets(content)
+        return f"{COT_OPEN}{reasoning}{COT_SPLIT}{cleaned}" if reasoning else cleaned
+
+
+    def _build_system_with_memories(self) -> str:
+        """构建带相关记忆的系统提示词"""
+        prompt = self.system_prompt_2
+        if self.related_memories:
+            prompt += "\n## 相关记忆(和最新对话有关的记忆)"
+            for m in self.related_memories:
+                prompt += f"\n{m['date']}: {m['content']}"
+        return prompt
+
+
+    def process_user_message(self, user_input: str, play_tts: bool = True) -> tuple[str, bool]:
+        """处理用户消息并返回 AI 回复"""
+        if not self.use_chatai:
+            return f"ChatAI不可用 {user_input}", False
+
+        self.related_memories = self._select_related_memories(self.last_ai_response, user_input)
+        cleaned_input = clean_brackets(user_input)
+        self._append_message("user", cleaned_input)
+        self.logger.debug(f"用户消息: {cleaned_input}")
+
+        if self.related_memories:
+            self.logger.debug(
+                f"匹配记忆({len(self.related_memories)}条): "
+                f"{[m['matched_essence'] for m in self.related_memories]}"
             )
 
-            # 获取AI回复和Token
-            content = response.choices[0].message.content
-            
-            # 获取思维链内容，如果不存在则为空值
-            reasoning_content = getattr(response.choices[0].message, 'reasoning_content', '')
-            
-            tokens_used = response.usage.total_tokens
-            return content, reasoning_content, tokens_used
-        
-        except Exception as e:
-            print(f"错误| ChatAI API异常: {str(e)}")
-            return "欸……连接不上我的大脑😵", "", None
-        
-    def clean_old_reasoning_content(self):
-        """清理前后端历史中的思维链"""
-        # 找出"backend_history"中所有的AI回复
-        ai_messages = []
-        for i, msg in enumerate(self.backend_history):
-            if msg["role"] == "assistant":
-                ai_messages.append((i, msg))
-        
-        # 如果AI回复超过1条，清理倒数第2条及更早的思维链
-        if len(ai_messages) > 1:
-            for i, msg in ai_messages[:-1]:  # 除了最后1条之外的所有AI消息
-                content = msg["content"]
-                # 检查是否包含思维链格式
-                if content.startswith("【") and "】\n\n" in content:
-                    # 提取最终回复部分
-                    parts = content.split("】\n\n", 1)
-                    if len(parts) > 1:
-                        final_content = parts[1]
-                        # 更新为只有最终回复
-                        self.backend_history[i]["content"] = final_content
-                        print(f"信息| 已清理backend_history历史AI回复中的思维链，保留最终回复: {final_content[:50]}……")
-        
-        # 找出"backend_long_history"中所有的AI回复
-        ai_long_messages = []
-        for i, msg in enumerate(self.backend_long_history):
-            if msg["role"] == "assistant":
-                ai_long_messages.append((i, msg))
-        
-        # 如果AI回复超过1条，清理倒数第2条及更早的思维链
-        if len(ai_long_messages) > 1:
-            for i, msg in ai_long_messages[:-1]:  # 除了最后1条之外的所有AI消息
-                content = msg["content"]
-                # 检查是否包含思维链格式
-                if content.startswith("【") and "】\n\n" in content:
-                    # 提取最终回复部分
-                    parts = content.split("】\n\n", 1)
-                    if len(parts) > 1:
-                        final_content = parts[1]
-                        # 更新为只有最终回复
-                        self.backend_long_history[i]["content"] = final_content
-                        print(f"信息| 已清理backend_long_history历史AI回复中的思维链，保留最终回复: {final_content[:50]}……")
+        content, reasoning, tokens = self._call_chatai()
+        content = content.strip()
+        reasoning = reasoning.strip() if reasoning else ""
 
-    def handle_exit_detection(self, ai_response=None):
-        """处理退出标记"""
-        # 检测是否包含退出标记
-        if ai_response is not None:
-            should_exit = "🤐" in ai_response
-        else:
-            # 主动触发时，默认为True
-            should_exit = True
+        combined = self._combine_with_cot(content, reasoning)
+        self.last_ai_response = content
+
+        cleaned_combined = clean_brackets(combined)
+        self._append_message("assistant", cleaned_combined)
+
+        should_exit = EXIT_FLAG in content
+        if self.tts_success and play_tts:
+            self.process_ai_response_tts(content)
+
+        self._save_short_term_memory()
 
         if should_exit:
-            print("信息| 触发退出流程，开始递归总结")
-            
-            # 调用`添加时间信息到记忆`
-            self.add_time_info_to_memory()
-            # 调用方法进行递归总结
-            self.request_summary()
-            self.remove_summary_from_short_term_memory()
-            self.save_long_term_memory()
-        return should_exit
-    
-    def add_time_info_to_memory(self):
-        """添加时间信息到记忆"""
-        try:
-            # 获取当前时间
-            time_info = f"<OOC：{self.get_timeinfo_2()}>"
-            
-            # 读取短期记忆文件
-            file_path = "short_term_memory.json"
-            if not os.path.exists(file_path):
-                return
-                
-            with open(file_path, 'r', encoding='utf-8') as file:
-                short_term_memory = json.load(file)
-            
-            # 确保有足够的历史消息
-            if len(short_term_memory) >= 2:
-                # 获取总结前最后一轮对话
-                second_last_msg = short_term_memory[-2]
-                
-                # 检查是否已经包含时间信息，避免重复添加
-                if "<OOC：" not in second_last_msg["content"]:
-                    # 在消息内容末尾添加时间信息
-                    second_last_msg["content"] += f" {time_info}"
-                    
-                    # 保存修改后的短期记忆
-                    with open(file_path, 'w', encoding='utf-8') as file:
-                        json.dump(short_term_memory, file, ensure_ascii=False, indent=4)
-                    
-                    print(f"信息| 已在短期记忆中添加时间信息: {time_info}")
-                    
-                    # 更新后端历史中对应的消息
-                    if len(self.backend_history) >= 2:
-                        # 检查是否已包含时间信息
-                        if "<OOC：" not in self.backend_history[-2]["content"]:
-                            self.backend_history[-2]["content"] += f" {time_info}"
-                    
-                    # 更新后端长历史中对应的消息
-                    if len(self.backend_long_history) >= 2:
-                        # 检查是否已包含时间信息
-                        if "<OOC：" not in self.backend_long_history[-2]["content"]:
-                            self.backend_long_history[-2]["content"] += f" {time_info}"
-                else:
-                    print("信息| 时间信息已存在，跳过添加")
-        except Exception as e:
-            print(f"警告| 添加时间信息到短期记忆失败: {str(e)}")
+            self.trigger_exit_summary()
 
-    def chinese_to_translate_japanese(self, text):
-        """中译日或直接返回文本"""
-        if not USE_TRANSLATION:
-            # 不使用翻译时，直接返回输入文本
-            return text
-        
-        # 使用翻译时，调用火山翻译API
-        def translate_request():
-            # 服务信息
-            service_info = ServiceInfo(
-                'translate.volcengineapi.com',
-                {'Content-Type': 'application/json'},
-                Credentials(self.VOLC_ACCESS_KEY, self.VOLC_SECRET_KEY, 'translate', 'cn-north-1'),
-                5,
-                5
-            )
-            
-            # API信息
-            api_info = {
-                'translate': ApiInfo(
-                    'POST', 
-                    '/', 
-                    {'Action': 'TranslateText', 'Version': '2020-06-01'},
-                    {}, 
-                    {}
-                )
-            }
-            
-            # 创建服务实例并发送请求
-            service = Service(service_info, api_info)
-            body = {
-                'TargetLanguage': 'ja',  # 目标语言
-                'TextList': [text],
-                'SourceLanguage': 'zh'   # 源语言
-            }
-            
-            response = json.loads(service.json('translate', {}, json.dumps(body)))
-            
-            # 获取翻译结果
-            if "TranslationList" in response and len(response["TranslationList"]) > 0:
-                return response["TranslationList"][0]["Translation"]
-            else:
-                print(f"错误| 火山翻译API返回异常: {json.dumps(response, indent=2, ensure_ascii=False)}")
-                return None
-        
-        # 错误处理：请求超时
-        max_retries = 1  # 最大重试次数
-        retry_count = 0
-        
-        while retry_count <= max_retries:
-            try:
-                return translate_request()
-            except Exception as e:
-                # 判断是否为超时错误
-                is_timeout_error = "Read timed out" in str(e) or "timed out" in str(e).lower()
-                
-                if is_timeout_error and retry_count < max_retries:
-                    print(f"错误| 火山翻译异常: {str(e)}")
-                    print(f"提示| 检测到请求超时，正在进行第 {retry_count + 1} 次重试...")
-                    retry_count += 1
-                    continue
-                else:
-                    print(f"错误| 火山翻译异常: {str(e)}")
-                    traceback.print_exc()
-                    return None
-        
-        return None
+        # 长期记忆在退出时才进行写入
+        self.logger.info(f"Token: {tokens} | 条数: {len(self.backend_history)}")
 
-    def extract_dialogue_content(self, text):
-        """提取说话内容"""
-        # 匹配中文括号，并多次匹配
-        while True:
-            # 匹配包括换行符在内的所有字符
-            new_text = re.sub(r'（.*?）', '', text, flags=re.DOTALL)
-            if new_text == text:
-                break
-            text = new_text
-        
-        # 匹配英文括号，并多次匹配
-        while True:
-            new_text = re.sub(r'\(.*?\)', '', text, flags=re.DOTALL)
-            if new_text == text:
-                break
-            text = new_text
-        
-        # 对提取的内容进行清洗
-        cleaned_text = re.sub(r'\s+', ' ', text.strip())
-        cleaned_text = cleaned_text.replace("...", "……")
-        cleaned_text = re.sub(r'[Zz]{3,}', '', cleaned_text)
-        
-        print(f"信息| 处理后的内容: {cleaned_text}")
-        return cleaned_text
-        
-    def text_to_speech(self, text):
-        """TTS和播放"""
-        try:
-            # 构建请求数据
-            request_data = REF_AUDIO_CONFIG.copy()
-            request_data["text"] = text
-            print(f"信息| TTS文本: {text}")
-            print(f"信息|" + "-" * 100)
-            
-            # 调用TTS API
-            response = requests.post(TTS_API_URL, json=request_data)
-            
-            # 检查响应
-            if response.status_code != 200:
-                print(f"错误| TTS错误: HTTP {response.status_code}")
-                try:
-                    error_detail = response.json()
-                    print(f"信息| {json.dumps(error_detail, indent=2, ensure_ascii=False)}")
-                except:
-                    print(f"信息| {response.text[:200]}")
-                return False
-            
-            # 保存音频
-            os.makedirs(self.audio_dir, exist_ok=True)
-            timestamp = int(time.time())
-            audio_path = os.path.join(self.audio_dir, f"response_{timestamp}.wav")
-            
-            with open(audio_path, "wb") as f:
-                f.write(response.content)
-            
-            # 播放音频
-            pygame.mixer.music.load(audio_path)
-            pygame.mixer.music.play()
-            
-            # 等待播放完成
-            while pygame.mixer.music.get_busy():
-                time.sleep(0.1)        
-            return True
-            
-        except Exception as e:
-            print(f"错误| TTS异常: {str(e)}")
-            traceback.print_exc()
+        return content, should_exit
+
+
+    def process_ai_response_tts(self, ai_response: str) -> bool:
+        """提取对话并执行TTS"""
+        if not self.tts_success:
             return False
 
-    def process_user_message(self, user_input, play_tts=True):
-        """处理用户消息"""
-        # 在用户输入前，先匹配上一次的AI回复
-        ai_matched_memories = []
-        if self.last_ai_response:
-            ai_matched_memories = self.match_essences_with_text(self.last_ai_response)
+        dialogue = self._extract_dialogue(ai_response)
+        if not dialogue:
+            return EXIT_FLAG in ai_response
 
-        # 匹配当前用户输入
-        user_matched_memories = self.match_essences_with_text(user_input)
+        translated = self._translate_to_japanese(dialogue)
+        text = translated or dialogue
+        return self._text_to_speech(text)
 
-        # 合并并去重，根据日期去重
-        all_matched_memories = ai_matched_memories + user_matched_memories
-        unique_memories = []
-        seen_dates = set()
 
-        for memory in all_matched_memories:
-            if memory["date"] not in seen_dates:
-                seen_dates.add(memory["date"])
-                unique_memories.append(memory)
+    def _extract_dialogue(self, text: str) -> str:
+        """从AI回复中提取可读内容"""
+        match = re.search(r"content:\s*(.*?)(?=\n\w+:|\Z)", text, re.DOTALL)
+        if match:
+            text = match.group(1).strip()
 
-        # 按关键词分组
-        memories_by_essence = {}
-        for memory in unique_memories:
-            essence = memory["matched_essence"]
-            if essence not in memories_by_essence:
-                memories_by_essence[essence] = []
-            memories_by_essence[essence].append(memory)
+        prev = None
+        while prev != text:
+            prev = text
+            text = re.sub(r"（.*?）", "", text, flags=re.DOTALL)
+            text = re.sub(r"\(.*?\)", "", text, flags=re.DOTALL)
 
-        # 获取所有关键词
-        essences = list(memories_by_essence.keys())
-        num_essences = len(essences)
+        cleaned = re.sub(r"\s+", " ", text.strip())
+        cleaned = cleaned.replace("...", "……")
+        cleaned = re.sub(r"[Zz]{3,}", "", cleaned)
+        return cleaned
 
-        selected_memories = []
 
-        # 具体匹配细则
-        if num_essences == 0:
-            # 没有匹配到任何关键词
-            self.related_memories = []
-        elif num_essences == 1:
-            # 1个关键词时，取3条固定+2条随机，共5条
-            memories = memories_by_essence[essences[0]]
-            if len(memories) <= 3:
-                selected_memories = memories
-            else:
-                # 前3条固定
-                selected_memories = memories[:3]
-                # 从剩余中随机取2条
-                remaining = memories[3:]
-                if len(remaining) <= 2:
-                    selected_memories.extend(remaining)
-                else:
-                    selected_memories.extend(random.sample(remaining, 2))
-        elif num_essences == 2:
-            # 2个关键词时，每个关键词取1条，再从这关键词池中取3条随机的，共5条
-            for essence in essences:
-                if memories_by_essence[essence]:
-                    selected_memories.append(memories_by_essence[essence][0])
-            
-            # 收集所有记忆（排除已选的）
-            all_memories = []
-            for essence in essences:
-                all_memories.extend(memories_by_essence[essence])
-            
-            # 移除已选的
-            remaining_memories = [m for m in all_memories if m not in selected_memories]
-            
-            # 随机选择3条
-            if len(remaining_memories) <= 3:
-                selected_memories.extend(remaining_memories)
-            else:
-                selected_memories.extend(random.sample(remaining_memories, 3))
-        elif num_essences == 3:
-            # 3个关键词时，每个关键词取1条，再从这关键词池中取2条随机的，共5条
-            for essence in essences:
-                if memories_by_essence[essence]:
-                    selected_memories.append(memories_by_essence[essence][0])
-            
-            # 收集所有记忆（排除已选的）
-            all_memories = []
-            for essence in essences:
-                all_memories.extend(memories_by_essence[essence])
-            
-            # 移除已选的
-            remaining_memories = [m for m in all_memories if m not in selected_memories]
-            
-            # 随机选择2条
-            if len(remaining_memories) <= 2:
-                selected_memories.extend(remaining_memories)
-            else:
-                selected_memories.extend(random.sample(remaining_memories, 2))
-        elif num_essences == 4:
-            # 4个关键词时，每个关键词取1条，再从这关键词池中取1条随机的，共5条
-            for essence in essences:
-                if memories_by_essence[essence]:
-                    selected_memories.append(memories_by_essence[essence][0])
-            
-            # 收集所有记忆（排除已选的）
-            all_memories = []
-            for essence in essences:
-                all_memories.extend(memories_by_essence[essence])
-            
-            # 移除已选的
-            remaining_memories = [m for m in all_memories if m not in selected_memories]
-            
-            # 随机选择1条
-            if remaining_memories:
-                selected_memories.append(random.choice(remaining_memories))
-        elif num_essences == 5:
-            # 5个关键词时，每个关键词取1条，不取随机，共5条
-            for essence in essences:
-                if memories_by_essence[essence]:
-                    selected_memories.append(memories_by_essence[essence][0])
-        else:
-            # 5个以上的关键词时，从所有的关键词池中随机取5条，共5条
-            # 收集所有记忆的第一条
-            all_first_memories = []
-            for essence in essences:
-                if memories_by_essence[essence]:
-                    all_first_memories.append(memories_by_essence[essence][0])
-            
-            # 随机选择5条
-            if len(all_first_memories) <= 5:
-                selected_memories = all_first_memories
-            else:
-                selected_memories = random.sample(all_first_memories, 5)
-
-        self.related_memories = selected_memories
-
-        # 添加用户消息到后端历史和后端长历史
-        self.backend_history.append({"role": "user", "content": user_input})
-        self.backend_long_history.append({"role": "user", "content": user_input})
-        
-        print(f"信息| 用户消息: {user_input}")
-        if ai_matched_memories:
-            print(f"信息| AI回复匹配到的相关记忆: {[m['matched_essence'] for m in ai_matched_memories]}")
-        if user_matched_memories:
-            print(f"信息| 用户输入匹配到的相关记忆: {[m['matched_essence'] for m in user_matched_memories]}")
-        
-        # 打印最终选择的记忆
-        if self.related_memories:
-            print(f"信息| 最终选择的记忆 ({len(self.related_memories)}条): {[m['matched_essence'] for m in self.related_memories]}")
-        else:
-            print("信息| 未匹配到相关记忆或相关记忆已在'你的记忆'部分")
-
-        # 调用`请求ChatAI`并获取回复
-        tokens_used = None
-        if self.use_chatai:
-            # 调用`请求ChatAI`
-            content, reasoning_content, tokens_used = self.call_chatai()
-
-            # 清理AI回复
-            content = content.strip()
-            reasoning_content = reasoning_content.strip() if reasoning_content else ""
-
-            # 组合思维链和最终回复
-            combined_content = f"【{reasoning_content}】\n\n{content}" if reasoning_content else content
-
-            # 保存当前AI回复，用于下一次匹配（使用原始回复，不包含思维链）
-            self.last_ai_response = content
-            
-            # 添加组合后的AI回复到后端历史和后端长历史
-            self.backend_history.append({"role": "assistant", "content": combined_content})
-            self.backend_long_history.append({"role": "assistant", "content": combined_content})
-
-            # 退出检测（使用原始回复检测）
-            should_exit = False
-            if self.tts_success and play_tts:
-                print(f"信息| 退出标记检测结果: {'🤐' in content}")
-                should_exit = self.process_ai_response(content)  # 使用原始回复
-            else:
-                print(f"信息| 退出标记检测结果: {'🤐' in content}")
-                should_exit = "🤐" in content
-
-            # 保存短期记忆
-            try:
-                file_path = "short_term_memory.json"
-                with open(file_path, 'w', encoding='utf-8') as file:
-                    json.dump(self.backend_history, file, ensure_ascii=False, indent=4)
-            except Exception as e:
-                print(f"警告| 保存`backend_history`到文件失败: {str(e)}")
-
-            # 如果检测到退出标记，请求总结
-            if should_exit:
-                self.handle_exit_detection(content)  # 使用原始回复
-
-            # 调用`保存长期记忆`
-            self.save_long_term_memory()
-
-            if reasoning_content:
-                print(f"信息| AI思维链：\n{reasoning_content}")
-            print(f"信息| AI对话内容：{content}")
-
-            print(f"信息| Token: {tokens_used} | 请求条数：{len(self.backend_history)} | 总结条数：{len(self.backend_long_history)}")
-            
-            # 返回原始回复给前端，确保UI不显示思维链
-            return content, should_exit
-        else:
-            ai_response = f"ChatAI不可用 {user_input} "
-            tokens_used = 0
-            return ai_response, False
-
-    def get_summary_history(self):
-        """获取用于对话总结的历史"""
-        # 只包含2天日记
-        memory_for_summary = self.format_memory_for_prompt(2)
-        summary_system_prompt = self.fixed_system_prompt + "\n\n你的记忆:\n" + memory_for_summary
-        
-        # 使用后端长历史
-        dialogue_history = self.backend_long_history
-        print(f"信息| 后端长历史总条数: {len(dialogue_history)}")
-        
-        if len(dialogue_history) > SUMMARY_HISTORY_LENGTH:
-            dialogue_history = dialogue_history[-SUMMARY_HISTORY_LENGTH:]
-            print(f"信息| 截取最后{SUMMARY_HISTORY_LENGTH}条用于总结")
-        else:
-            print(f"信息| 使用全部{len(dialogue_history)}条用于总结")
-        
-        # 返回用于对话总结的历史
-        summary_history = [{"role": "system", "content": summary_system_prompt}] + dialogue_history
-        print(f"信息| 最终用于总结的条数: {len(summary_history)}")
-        
-        print("信息| 用于总结的历史记录详细内容:")
-        for i, msg in enumerate(summary_history):
-            print(f"      [{i}] {msg['role']}: {msg['content'][:9999]}{'...' if len(msg['content']) > 9999 else ''}")
-        
-        return summary_history
-    
-    def save_summary_result(self, summary_type, result):
-        """保存总结结果"""
-        try:
-            debug_dir = "debug"
-            if not os.path.exists(debug_dir):
-                os.makedirs(debug_dir)
-            
-            # 文件名
-            filename = f"{debug_dir}/{summary_type}.json"
-            
-            # 准备数据
-            summary_data = {
-                "type": summary_type,
-                "timestamp": int(time.time()),
-                "formatted_time": self.get_timeinfo_1(),
-                "result": result
-            }
-            
-            # 保存到文件
-            with open(filename, 'w', encoding='utf-8') as file:
-                json.dump(summary_data, file, ensure_ascii=False, indent=4)
-            
-            print(f"信息| {summary_type}结果已保存到 {filename}")
-        except Exception as e:
-            print(f"警告| 保存{summary_type}结果失败: {str(e)}")
-
-    def save_summary_messages(self, summary_type, messages):
-        """保存总结消息列表"""
-        try:
-            debug_dir = "debug"
-            if not os.path.exists(debug_dir):
-                os.makedirs(debug_dir)
-            
-            # 文件名
-            filename = f"{debug_dir}/{summary_type}_messages.json"
-            
-            # 准备数据
-            summary_data = {
-                "type": summary_type,
-                "timestamp": int(time.time()),
-                "formatted_time": self.get_timeinfo_1(),
-                "messages": messages
-            }
-            
-            # 保存到文件
-            with open(filename, 'w', encoding='utf-8') as file:
-                json.dump(summary_data, file, ensure_ascii=False, indent=4)
-            
-            print(f"信息| {summary_type}消息列表已保存到 {filename}")
-            print(f"信息| 正在总结中……")
-        except Exception as e:
-            print(f"警告| 保存{summary_type}消息列表失败: {str(e)}")
-        
-    def remove_summary_from_short_term_memory(self):
-        """从短期记忆中删除总结相关的消息"""
-        try:
-            file_path = "short_term_memory.json"
-            if not os.path.exists(file_path):
-                return
-                
-            # 读取短期记忆
-            with open(file_path, 'r', encoding='utf-8') as file:
-                short_term_memory = json.load(file)
-            
-            # 查找并删除总结相关的消息
-            if len(short_term_memory) >= 2:
-                last_two_messages = short_term_memory[-2:]
-                # 检查特定条件
-                summary_request_found = any(
-                    msg.get("role") == "user" and 
-                    "请以第一人称总结以上对话" in msg.get("content", "")
-                    for msg in last_two_messages
-                )
-                
-                summary_response_found = any(
-                    msg.get("role") == "assistant" and 
-                    msg.get("content") and 
-                    not "🤐" in msg.get("content", "")
-                    for msg in last_two_messages
-                )
-                
-                # 移除总结消息
-                if summary_request_found and summary_response_found:
-                    short_term_memory = short_term_memory[:-2]
-                    
-                    # 保存修改后的短期记忆
-                    with open(file_path, 'w', encoding='utf-8') as file:
-                        json.dump(short_term_memory, file, ensure_ascii=False, indent=4)
-                    print("信息| 已从短期记忆中删除总结相关的消息")
-        except Exception as e:
-            print(f"警告| 从短期记忆中删除总结消息失败: {str(e)}")
-
-    def call_chatai_for_summary(self, messages):
-        """请求总结"""
-        try:
-            response = self.client.chat.completions.create(
-                model=MODEL,
-                messages=messages,
-                temperature=0.8,
-                max_tokens=8192,
-                response_format={"type": "json_object"}
+    def _get_translate_service(self) -> Service:
+        """懒加载火山翻译，复用连接"""
+        if self._translate_svc is None:
+            service_info = ServiceInfo(
+                "translate.volcengineapi.com",
+                {"Content-Type": "application/json"},
+                Credentials(self.cfg.volc_access_key, self.cfg.volc_secret_key,
+                            "translate", "cn-north-1"),
+                5, 5,
             )
+            api_info = {
+                "translate": ApiInfo("POST", "/",
+                                     {"Action": "TranslateText", "Version": "2020-06-01"},
+                                     {}, {})
+            }
+            self._translate_svc = Service(service_info, api_info)
+        return self._translate_svc
 
-            # 获取AI回复和Token
-            ai_response = response.choices[0].message.content
-            tokens_used = response.usage.total_tokens
-            return ai_response, tokens_used
-        
-        except Exception as e:
-            print(f"错误| 总结API调用异常: {str(e)}")
-            return "错误| 总结API调用失败", None
 
-    def request_summary(self):
-        """请求递归总结"""
+    def _translate_to_japanese(self, text: str) -> Optional[str]:
+        """将文本翻译为日语，超时自动重试一次"""
+        if not self.cfg.use_translation:
+            return text
+
+        for attempt in range(2):
+            try:
+                service = self._get_translate_service()
+                body = {"TargetLanguage": "ja", "TextList": [text], "SourceLanguage": "zh"}
+                resp = json.loads(service.json("translate", {}, json.dumps(body)))
+                if "TranslationList" in resp and resp["TranslationList"]:
+                    return resp["TranslationList"][0]["Translation"]
+                self.logger.error(f"翻译API返回异常: {json.dumps(resp, ensure_ascii=False)}")
+                return None
+            except Exception as e:
+                if attempt == 0 and "timed out" in str(e).lower():
+                    self.logger.warning("翻译超时，重试中……")
+                    continue
+                self.logger.error(f"翻译异常: {e}")
+                return None
+        return None
+
+
+    def _text_to_speech(self, text: str) -> bool:
+        """调用 GPT-SoVITS 并播放语音"""
         try:
-            # 时间信息已在`handle_exit_detection`中已经添加
-            
-            # 获取用于总结的历史记录
-            summary_history = self.get_summary_history()
-            
-            # 保存对话总结的消息列表
-            self.save_summary_messages("dialogue_summary", summary_history)
-            
-            # 对话总结请求
-            summary_request = {
-                "role": "user", 
-                "content": """
-            <OOC：请总结以上对话：
-            # 视角要求
-            使用第一人称，即"我"(亚托莉)
-
-            # 内容整理
-            1. 保持内容简洁清晰，主语和对象描述正确
-            2. 根据对话内容修改日记、约定、用户偏好、计划、动机和关键记忆
-            3. 删除已完成或已过期的计划和动机
-
-            # 输出规范
-            ## diary: 日记
-            - 例：凌晨，主人趁我睡觉偷偷亲了我。早上，我早起给主人做了早餐，然后在床边等待主人醒来，看着他睡觉的样子感觉好幸福……
-            ## promise: 约定，你和用户间的长期有效的约定，描述对象和要求需具体
-            - 例：我们约定永远不分开
-            - 例：我向主人承诺要好好听话
-            ## preference: 用户偏好，用户的偏好和信息，需细分(癖好、喜欢、讨厌、习惯、信息、特征、补充等七类)
-            - 例：癖好：萝莉控；喜欢：喜欢吃辣……
-            ## plan: 计划，你的未来计划
-            - 例：x月x日；保持最完美的形象和主人一起回家
-            - 例：明天；自己去买菜
-            ## motivation: 动机，你未实现的内心渴望或驱动力
-            - 例：想成为让主人骄傲的仿生人
-            ## pivotal_memory: 关键记忆，你与用户发生的重大转变事件，描述需要直白具体
-            - 例：我愿意给主人膝枕
-            - 例：我同意和主人一起泡澡
-
-            # 请使用以下JSON格式输出：
-            {
-                "diary": [{"date": "x年x月x日", "content": "内容"}],
-                "promise": ["约定"],
-                "preference": ["用户偏好"], 
-                "plan": [{"date": "时间", "content": "内容"}],
-                "motivation": ["动机"],
-                "pivotal_memory": ["关键记忆"]
-            >
+            request_data = {
+                "ref_audio_path": self.cfg.tts_ref_audio,
+                "prompt_text": self.cfg.tts_prompt_text,
+                "prompt_lang": self.cfg.tts_prompt_lang,
+                "text_lang": self.cfg.tts_text_lang,
+                "top_k": 50,
+                "top_p": 0.95,
+                "temperature": 1.0,
+                "batch_size": 40,
+                "parallel_infer": True,
+                "split_bucket": True,
+                "super_sampling": True,
+                "text": text,
             }
-            """.strip()
-            }
-            
-            # 添加总结请求到历史记录
-            summary_history.append(summary_request)
-            
-            # 使用专门的总结方法获取总结
-            current_summary, _ = self.call_chatai_for_summary(summary_history)
-            
-            # 保存对话总结结果
-            self.save_summary_result("dialogue_summary", current_summary)
-            
-            # 获取简短时间格式
-            short_date = self.get_timeinfo_3()
-            
-            # 构建递归总结的信息
-            if any([self.memory_core_diary, self.memory_core_promise, self.memory_core_preference, self.memory_core_plan, self.memory_core_motivation, self.memory_core_pivotal_memory]):
-                # 获取最近两天的日记用于递归总结
-                recent_diary = self.get_recent_diary_for_recursion(2)
-                
-                # 将现有记忆转换为JSON字符串用于递归总结
-                old_memory_json = json.dumps({
-                    "diary": recent_diary,  # 只传递最近两天的日记
-                    "promise": self.memory_core_promise,
-                    "preference": self.memory_core_preference,
-                    "plan": self.memory_core_plan,
-                    "motivation": self.memory_core_motivation,
-                    "pivotal_memory": self.memory_core_pivotal_memory
-                }, ensure_ascii=False)
-                
-                # 递归总结请求
-                recursive_prompt = f"""
-                请将新旧记忆合并为统一的第一人称记忆库：
+            self.logger.debug(f"TTS文本: {text}")
+            response = requests.post(TTS_API_URL, json=request_data, timeout=60)
 
-                # 整理要求
-                ## 视角要求
-                使用第一人称，即"我"(亚托莉)
-                - 例：今天中午，我在家打扫卫生，还给主人做了早餐……
-                ## 整合要求
-                新旧记忆是时间先后的线性关系，需整理成一个记忆
-                - 例：凌晨、早晨、中午、午后、晚上……
-                ## 日记处理
-                ### 昨天的日记：修改成精简版(记录做了什么，心里是什么样的；去除简单的吃饭、洗澡和睡觉等)
-                - 例：中午主人第一次亲吻我，被认可真的好开心！晚上主人竟然想和我一起洗澡，虽然拒绝了，但是一想起来就好害羞呢~
-                ### 当天的日记：保留一整天的完整内容
-                - 例：早上，我早早起来给主人做了早餐，然后在床边等待主人醒来……中午我们一起出去玩了……
-                ## 计划和动机的更新：
-                - 将相对日期(明天/后天)转换为具体日期(基于新记忆日期)
-                - 删除已完成或已过期的计划和动机
-                ## 冲突处理
-                新旧记忆出现冲突时，以新记忆为主
+            if response.status_code != 200:
+                self.logger.error(f"TTS错误: HTTP {response.status_code}")
+                return False
 
-                # 需整合的记忆
-                ## 旧记忆:
-                {old_memory_json}
-                ## 新记忆 | {short_date}:
-                {current_summary}
-                """.strip()
-                
-                # 递归总结提示词和请求列表
-                recursive_messages = [
-                    {
-                        "role": "system", 
-                        "content": """
-                你是专业的记忆整合专家，负责将新旧记忆融合为连贯的第一人称叙事
+            audio_path = os.path.join(DEBUG_DIR, f"response_{int(time.time())}.wav")
+            with open(audio_path, "wb") as f:
+                f.write(response.content)
 
-                # 输出规范
-                ## diary: 日记
-                - 例：凌晨，主人趁我睡觉偷偷亲了我。早上，我早起给主人做了早餐，然后在床边等待主人醒来，看着他睡觉的样子感觉好幸福……
-                ## promise: 约定，你和用户间的长期有效的约定，描述对象和要求需具体
-                - 例：我们约定永远不分开
-                - 例：我向主人承诺要好好听话
-                ## preference: 用户偏好，用户的偏好和信息，需细分(癖好、喜欢、讨厌、习惯、信息、特征、补充等七类)
-                - 例：癖好：萝莉控；喜欢：喜欢吃辣……
-                ## plan: 计划，你的未来计划
-                - 例：x月x日；保持最完美的形象和主人一起回家
-                ## motivation: 动机，你未实现的内心渴望或驱动力
-                - 例：想成为让主人骄傲的仿生人
-                ## pivotal_memory: 关键记忆，你与用户发生的重大转变事件，描述需要直白具体
-                - 例：我愿意给主人膝枕
-                - 例：我同意和主人一起泡澡
-                
-                请使用以下JSON格式输出：
-                {
-                    "diary": [{"date": "x年x月x日", "content": "内容"}],
-                    "promise": ["约定"],
-                    "preference": ["用户偏好"], 
-                    "plan": [{"date": "时间", "content": "内容"}],
-                    "motivation": ["动机"],
-                    "pivotal_memory": ["关键记忆"]
-                }
-                """
-                    },
-                    {"role": "user", "content": recursive_prompt}
-                ]
-                
-                # 保存递归总结的消息列表
-                self.save_summary_messages("recursive_summary", recursive_messages)
-                
-                # 获取递归总结
-                recursive_summary, _ = self.call_chatai_for_summary(recursive_messages)
-                
-                # 保存递归总结结果
-                self.save_summary_result("recursive_summary", recursive_summary)
-                
-                # 保存递归总结到记忆核心
-                self.save_memory_core(recursive_summary)
-                print(f"信息| 递归总结完成: {recursive_summary[:9999]}")
-                return recursive_summary
-            else:
-                # 没有旧记忆，直接保存当前总结
-                self.save_memory_core(current_summary)
-                print(f"信息| 总结完成（无旧记忆）: {current_summary[:9999]}")
-                return current_summary
-                
+            pygame.mixer.music.load(audio_path)
+            pygame.mixer.music.play()
+            while pygame.mixer.music.get_busy():
+                time.sleep(0.1)
+            return True
+
         except Exception as e:
-            print(f"错误| 获取总结失败: {str(e)}")
+            error_msg = str(e).lower()
+            tb = traceback.format_exc()
+            with open(os.path.join(DEBUG_DIR, "TTS_Error.log"), "w", encoding="utf-8") as f:
+                f.write(tb)
+
+            if any(kw in error_msg for kw in ("connection refused", "max retries", "errno 111", "errno 10061")):
+                self.logger.error("GPT-SoVITS 服务未运行")
+            else:
+                self.logger.error(f"GPT-SoVITS 异常: {e}")
+            return False
+
+
+    def trigger_exit_summary(self):
+        """执行退出总结流程"""
+        self.logger.info("触发退出流程，开始递归总结")
+        self._add_time_to_memory()
+        self._request_summary()
+        self._remove_summary_from_short_term()
+        self._save_long_term_memory()
+
+
+    def _add_time_to_memory(self):
+        """向短期记忆添加时间标记"""
+        try:
+            tag = TIME_TAG_FMT.format(get_timeinfo_2())
+            for hist in (self.backend_history, self.backend_long_history):
+                if len(hist) >= 2 and "<OOC>" not in hist[-2].get("content", ""):
+                    hist[-2]["content"] += tag
+            self._save_short_term_memory()
+        except Exception as e:
+            self.logger.warning(f"添加时间信息失败: {e}")
+
+
+    def _request_summary(self) -> Optional[str]:
+        """请求对话总结并保存记忆"""
+        try:
+            summary_history = self._get_summary_history()
+            self._save_debug("dialogue_summary_messages", summary_history)
+
+            summary_request = {"role": "user", "content": PromptLoader.load("Summary_Request.txt")}
+            summary_history.append(summary_request)
+            current_summary, _ = self._call_chatai_for_summary(summary_history)
+            self._save_debug("dialogue_summary_result", current_summary)
+
+            has_old = any(self.memory_core[cat] for cat in MEMORY_CATEGORIES)
+            if not has_old:
+                self._save_memory_core(current_summary)
+                self.logger.info("总结完成（无旧记忆）")
+                return current_summary
+
+            recent_diary = self._get_recent_diary(2)
+            old_memory_json = json.dumps({
+                "diary": recent_diary,
+                "promise": self.memory_core["promise"],
+                "preference": self.memory_core["preference"],
+                "plan": self.memory_core["plan"],
+                "motivation": self.memory_core["motivation"],
+                "pivotal_memory": self.memory_core["pivotal_memory"],
+            }, ensure_ascii=False)
+
+            recursive_user = PromptLoader.render(
+                "Summary_Recursive.txt",
+                old_memory_json=old_memory_json,
+                short_date=get_timeinfo_3(),
+                current_summary=current_summary,
+            )
+            recursive_system = PromptLoader.load("Summary_System.txt")
+
+            recursive_messages = [
+                {"role": "system", "content": recursive_system},
+                {"role": "user", "content": recursive_user},
+            ]
+            self._save_debug("recursive_summary_messages", recursive_messages)
+
+            recursive_result, _ = self._call_chatai_for_summary(recursive_messages)
+            self._save_debug("recursive_summary_result", recursive_result)
+            self._save_memory_core(recursive_result)
+            self.logger.info("递归总结完成")
+            return recursive_result
+
+        except Exception as e:
+            self.logger.error(f"获取总结失败: {e}")
             return None
 
-    def process_ai_response(self, ai_response):
-        """处理AI回复流程"""
-        # 调用`提取说话内容`处理
-        dialogue_content = self.extract_dialogue_content(ai_response)
-        
-        # 调用`中译日`处理
-        japanese_text = None
-        try:
-            if dialogue_content:
-                japanese_text = self.chinese_to_translate_japanese(dialogue_content)
-        except Exception as e:
-            print(f"错误| 翻译失败: {str(e)}")
-        
-        if japanese_text:
-            print(f"信息| 翻译后文本: {japanese_text}")
-        
-        # 调用`TTS和播放`处理
-        if japanese_text:
-            self.text_to_speech(japanese_text)
-        elif dialogue_content:
-            print("警告| 翻译错误，使用原文TTS")
-            self.text_to_speech(dialogue_content)
-        
-        # 只返回是否检测到退出标记，不处理退出逻辑
-        return "🤐" in ai_response
 
-    def get_opening_line(self):
+    def _get_summary_history(self) -> list[dict]:
+        """构建总结用历史消息"""
+        memory_for_summary = self._format_memory_for_prompt(2)
+        sys_prompt = self.system_prompt_1 + "\n你的记忆:\n" + memory_for_summary
+        dialogue = self.backend_long_history[-self.cfg.summary_history_length:]
+        return [{"role": "system", "content": sys_prompt}] + dialogue
+
+
+    def _call_chatai_for_summary(self, messages: list[dict]) -> tuple[str, Optional[int]]:
+        """调用AI进行总结"""
+        try:
+            content, _, tokens = self._chat_completion(
+                messages,
+                SUMMARY_TEMPERATURE,
+                response_format={"type": "json_object"},
+            )
+            return content, tokens
+        except Exception as e:
+            self.logger.error(f"总结API调用异常: {e}")
+            return "{}", None
+
+
+    def _remove_summary_from_short_term(self):
+        """从短期记忆中删除总结请求与结果"""
+        try:
+            if not os.path.exists(SHORT_TERM_MEMORY_FILE):
+                return
+            with open(SHORT_TERM_MEMORY_FILE, "r", encoding="utf-8") as f:
+                stm = json.load(f)
+            if len(stm) >= 2:
+                last_two = stm[-2:]
+                has_req = any("请以第一人称总结以上对话" in m.get("content", "") for m in last_two)
+                has_resp = any(m.get("role") == "assistant" for m in last_two)
+                if has_req and has_resp:
+                    stm = stm[:-2]
+                    with open(SHORT_TERM_MEMORY_FILE, "w", encoding="utf-8") as f:
+                        json.dump(stm, f, ensure_ascii=False, indent=4)
+                    self.logger.info("已从短期记忆中删除总结消息")
+        except Exception as e:
+            self.logger.warning(f"删除总结消息失败: {e}")
+
+
+    def _test_chatai_service(self) -> bool:
+        """测试 ChatAI 服务(开场白)"""
+        # 测试AI连通性也是作为开场白方法，确保在用户实际发送信息前不进行写入到后端历史、后端长历史即符合预期
+        self.logger.info("测试ChatAI……")
+        try:
+            time_info = get_timeinfo_2()
+            has_memory = (
+                os.path.exists(SHORT_TERM_MEMORY_FILE)
+                or os.path.exists(os.path.join(MEMORY_CORE_DIR, "Memory_Core_diary.json"))
+            )
+
+            if has_memory:
+                test_content = (
+                    f"{BOOT_MSG}，如果时间跨度较小则侧重上下文推理，"
+                    f"否则应该重点推理该跨度时间内可能做的事情，比如一些日常；"
+                    f"此次回复不要带'{EXIT_FLAG}' | {time_info}</OOC>"
+                )
+            else:
+                test_content = (
+                    f"<OOC>你是用户网购的实验性仿生人，使命是实现用户愿望。"
+                    f"现在是你和用户第一次见面，你刚刚从充电舱中醒来，请和用户打招呼吧。"
+                    f"很多事物对亚托莉来说是新奇的，她会好奇，会偷偷打量周围的事物。"
+                    f"另外注意人称，回复自称为`我` | {time_info}</OOC>"
+                )
+
+            self._append_message("user", clean_brackets(test_content))
+
+            content, reasoning, tokens = self._call_chatai()
+            combined = self._combine_with_cot(
+                content.strip(), reasoning.strip() if reasoning else ""
+            )
+            self._append_message("assistant", clean_brackets(combined))
+
+            self.logger.info(f"ChatAI连接正常 | Token: {tokens}")
+            return True
+        except Exception as e:
+            self.logger.error(f"ChatAI API 错误: {e}")
+            return False
+
+
+    def _test_tts_service(self) -> bool:
+        """TTS服务检测"""
+        self.logger.info("测试TTS服务……")
+        try:
+            if not os.access(DEBUG_DIR, os.W_OK):
+                self.logger.error("TTS输出文件夹不可写")
+                return False
+            requests.get(TTS_API_URL, timeout=3)
+            self.logger.info("TTS服务连接正常")
+            return True
+        except requests.ConnectionError:
+            self.logger.warning("TTS服务未运行，将以静音模式工作")
+            return False
+        except Exception as e:
+            self.logger.warning(f"TTS检测异常: {e}")
+            return False
+
+
+    def _generate_opening_line(self) -> str:
+        """生成开场白"""
+        if not self.use_chatai:
+            return "欸……连接不上我的大脑😵"
+        last = self.backend_history[-1]["content"]
+        if self.cfg.use_cot and last.startswith(COT_OPEN) and COT_SPLIT in last:
+            return last.split(COT_SPLIT, 1)[1]
+        return last
+
+
+    def _save_debug(self, name: str, data):
+        """保存调试数据"""
+        try:
+            path = os.path.join(DEBUG_DIR, f"{name}.json")
+            payload = {
+                "type": name,
+                "timestamp": int(time.time()),
+                "formatted_time": get_timeinfo_1(),
+                "data": data,
+            }
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            self.logger.warning(f"保存调试数据失败: {e}")
+
+
+    def get_opening_line(self) -> str:
         """获取开场白"""
         return self.opening_line
 
-    def delete_last_conversation_pair(self):
-        """删除最后一轮对话"""
-        deleted_count = 0
-        
-        # 从`backend_history`中删除最后一轮对话
-        while len(self.backend_history) > 1:  # 保留系统消息
-            last_message = self.backend_history[-1]
-            if last_message["role"] == "assistant":
-                # 删除AI回复
-                self.backend_history.pop()
-                deleted_count += 1
-                # 继续检查前一条是否是用户消息
-                if len(self.backend_history) > 1 and self.backend_history[-1]["role"] == "user":
-                    self.backend_history.pop()
-                    deleted_count += 1
-                break
-            elif last_message["role"] == "user":
-                # 如果最后一条是用户消息，也删除
-                self.backend_history.pop()
-                deleted_count += 1
-                break
-            else:
-                break
-        
-        # 从`backend_long_history`中删除最后一轮对话
-        while len(self.backend_long_history) > 0:
-            last_message = self.backend_long_history[-1]
-            if last_message["role"] == "assistant":
-                # 删除AI回复
-                self.backend_long_history.pop()
-                # 继续检查前一条是否是用户消息
-                if len(self.backend_long_history) > 0 and self.backend_long_history[-1]["role"] == "user":
-                    self.backend_long_history.pop()
-                break
-            elif last_message["role"] == "user":
-                # 如果最后一条是用户消息，也删除
-                self.backend_long_history.pop()
-                break
-            else:
-                break
-        
-        print(f"信息| 已删除 {deleted_count} 条消息")
-        return deleted_count
 
-class BubbleLabel(QLabel):
-    """气泡标签控件"""
-    def __init__(self, text, is_user=False, is_system=False, parent=None):
-        super().__init__(text, parent)
-        self.is_user = is_user
-        self.is_system = is_system
-        
-        # 设置文本格式
-        self.setWordWrap(True)
-        self.setMargin(12)
-        self.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        
-        # 系统气泡
-        if is_system:
-            self.setStyleSheet("""
-                BubbleLabel {
-                    background-color: rgba(246, 246, 246, 0.8);
-                    color: #b2b2b2;
-                    border-radius: 18px;
-                    padding: 1px 1px;
-                    font-size: 10px;
-                }
-            """)
-            self.setAlignment(Qt.AlignCenter)
-        elif is_user:
-        # 用户气泡
-            self.setStyleSheet("""
-                BubbleLabel {
-                    background-color: rgba(255, 255, 255, 0.5);
-                    color: black;
-                    border-radius: 15px;
-                    padding: 1px 1px;
-                }
-            """)
-            self.setAlignment(Qt.AlignLeft)
-        else:
-        # AI气泡
-            self.setStyleSheet("""
-                BubbleLabel {
-                    background-color: rgba(255, 255, 255, 0.5);
-                    color: black;
-                    border-radius: 15px;
-                    padding: 1px 1px;
-                }
-            """)
-            self.setAlignment(Qt.AlignLeft)
-        
-        # 设置大小策略
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+# 通用后台 Worker
+class Worker(QObject):
+    finished = pyqtSignal(object)
+    failed = pyqtSignal(str)
 
-class AvatarLabel(QLabel):
-    """圆形头像控件"""
-    def __init__(self, is_user=False, parent=None):
-        super().__init__(parent)
-        self.is_user = is_user
-        # 头像大小
-        self.setFixedSize(50, 50)
-        self.setScaledContents(True)
-        
-        # 加载图片
-        avatar_path = USER_AVATAR_PATH if is_user else AI_AVATAR_PATH
-        self.set_avatar(avatar_path)
-    
-    def set_avatar(self, path):
-        """设置头像图片并裁剪"""
-        # 加载图片
-        pixmap = QPixmap(path)
-        if pixmap.isNull():
-            # 加载失败则使用默认颜色做头像
-            if self.is_user:
-                self.setStyleSheet("""
-                    AvatarLabel {
-                        background-color: #0099ff;
-                        border-radius: 20px;
-                    }
-                """)
-            else:
-                self.setStyleSheet("""
-                    AvatarLabel {
-                        background-color: #4CAF50;
-                        border-radius: 20px;
-                    }
-                """)
-            return
-            
-        # 缩放图片以适应控件大小
-        scaled_pixmap = pixmap.scaled(
-            self.size(), 
-            Qt.KeepAspectRatioByExpanding, 
-            Qt.SmoothTransformation
-        )
-        
-        # 创建圆形蒙版
-        mask = QPixmap(scaled_pixmap.size())
-        mask.fill(Qt.transparent)
-        
-        # 创建圆形路径
-        path = QPainterPath()
-        path.addEllipse(0, 0, mask.width(), mask.height())
-        
-        # 应用圆形蒙版
-        region = QRegion(path.toFillPolygon().toPolygon())
-        self.setMask(region)
-        
-        # 设置图片
-        self.setPixmap(scaled_pixmap)
-
-class BlurredBackgroundWidget(QWidget):
-    """毛玻璃背景部件"""
-    # "blur_radius"毛玻璃等级
-    def __init__(self, parent=None, blur_radius=2):
-        super().__init__(parent)
-        self.blur_radius = blur_radius
-        self.background_pixmap = None
-        self.load_background_image()
-        
-    def load_background_image(self):
-        """加载背景图片"""
-        try:
-            # 尝试加载背景图片
-            background_paths = [
-                "background.jpg",
-                "background.png",
-                "assets/background.jpg",
-                "assets/background.png"
-            ]
-            
-            image_path = None
-            for path in background_paths:
-                if os.path.exists(path):
-                    image_path = path
-                    break
-            
-            if image_path and HAS_PIL:
-                # 使用PIL加载并处理图片
-                image = Image.open(image_path)
-                # 调整图片大小为窗口大小
-                image = image.resize((540, 960), Image.Resampling.LANCZOS)
-                # 应用高斯模糊
-                blurred_image = image.filter(ImageFilter.GaussianBlur(radius=self.blur_radius))
-                # 转换为QPixmap
-                blurred_image = blurred_image.convert("RGBA")
-                data = blurred_image.tobytes("raw", "RGBA")
-                q_image = QImage(data, blurred_image.size[0], blurred_image.size[1], QImage.Format_RGBA8888)
-                self.background_pixmap = QPixmap.fromImage(q_image)
-            else:
-                # 创建纯白色背景
-                self.create_white_background()
-                
-        except Exception as e:
-            print(f"背景图片加载失败: {e}")
-            self.create_white_background()
-    
-    def create_white_background(self):
-        """创建纯白色毛玻璃背景"""
-        if HAS_PIL:
-            # 创建白色图片并应用模糊
-            white_image = Image.new('RGB', (540, 960), color='white')
-            blurred_image = white_image.filter(ImageFilter.GaussianBlur(radius=5))
-            blurred_image = blurred_image.convert("RGBA")
-            data = blurred_image.tobytes("raw", "RGBA")
-            q_image = QImage(data, blurred_image.size[0], blurred_image.size[1], QImage.Format_RGBA8888)
-            self.background_pixmap = QPixmap.fromImage(q_image)
-        else:
-            # 如果没有PIL，创建纯色QPixmap
-            self.background_pixmap = QPixmap(540, 960)
-            self.background_pixmap.fill(QColor(255, 255, 255))
-    
-    def paintEvent(self, event):
-        """绘制背景"""
-        if self.background_pixmap:
-            painter = QPainter(self)
-            painter.setRenderHint(QPainter.Antialiasing)
-            # 绘制模糊背景
-            painter.drawPixmap(self.rect(), self.background_pixmap)
-        super().paintEvent(event)
-
-class FrostedGlassWidget(QWidget):
-    """毛玻璃效果部件"""
-    # "opacity"清晰度
-    def __init__(self, parent=None, blur_radius=5, opacity=0.5):
-        super().__init__(parent)
-        self.blur_radius = blur_radius
-        self.opacity = opacity
-        self.setAttribute(Qt.WA_TranslucentBackground)
-        
-    def paintEvent(self, event):
-        """绘制毛玻璃效果"""
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        
-        # 设置半透明背景
-        painter.setOpacity(self.opacity)
-        painter.fillRect(self.rect(), QColor(255, 255, 255, 180))
-        
-        super().paintEvent(event)
-
-class ChatWindow(QMainWindow):
-    """主聊天窗口类"""
-    def __init__(self):
+    def __init__(self, fn, *args, **kwargs):
         super().__init__()
-        self.setWindowTitle("ATRI_Chat")
-        # 固定窗口大小
-        self.setFixedSize(540, 960)
-        
-        # 创建毛玻璃背景
-        self.background_widget = BlurredBackgroundWidget(self)
-        self.setCentralWidget(self.background_widget)
-        
-        # 创建主布局
-        main_layout = QVBoxLayout(self.background_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-        
-        # 创建顶栏，使用更强的模糊效果
-        self.create_header(main_layout)
-        
-        # 创建聊天显示区域
-        self.create_chat_area(main_layout)
-        
-        # 创建输入区域
-        self.create_input_area(main_layout)
-        
-        # 初始化后端服务和其他组件
-        self.initialize_services()
+        self.fn = fn
+        self.args = args
+        self.kwargs = kwargs
 
-    def create_header(self, main_layout):
-        """创建顶栏"""
-        header_container = FrostedGlassWidget(blur_radius=15, opacity=0.9)
-        header_container.setFixedHeight(50)
-        header_layout = QHBoxLayout(header_container)
-        header_layout.setContentsMargins(20, 0, 20, 0)
-        
-        # 添加AI名称标签
-        ai_name_label = QLabel("亚托莉")
-        ai_name_label.setFont(QFont("Microsoft YaHei", 14, QFont.Bold))
-        ai_name_label.setStyleSheet("color: #333333; background: transparent;")
-        header_layout.addWidget(ai_name_label)        
-        header_layout.addStretch()
-        
-        main_layout.addWidget(header_container)
-        
-        # 添加顶部分割线
-        header_divider = QFrame()
-        header_divider.setFrameShape(QFrame.HLine)
-        header_divider.setFrameShadow(QFrame.Sunken)
-        header_divider.setStyleSheet("background-color: rgba(196, 196, 196, 150);")
-        header_divider.setFixedHeight(1)
-        main_layout.addWidget(header_divider)
+    def run(self):
+        try:
+            result = self.fn(*self.args, **self.kwargs)
+            self.finished.emit(result)
+        except SystemExit:
+            self.failed.emit("后端配置错误，已退出")
+        except Exception as e:
+            logger.exception("后台任务失败")
+            self.failed.emit(str(e))
 
-    def create_chat_area(self, main_layout):
-        """创建聊天显示区域"""
-        # 创建聊天区域容器
-        chat_area_container = FrostedGlassWidget(blur_radius=8, opacity=0.8)
-        chat_area_layout = QVBoxLayout(chat_area_container)
-        chat_area_layout.setContentsMargins(0, 0, 0, 0)
-        chat_area_layout.setSpacing(0)
-        
-        # 创建滚动区域
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll_area.setFrameStyle(QFrame.NoFrame)
-        scroll_area.setStyleSheet("""
-            QScrollArea {
-                background: transparent;
-                border: none;
-            }
+
+# 前端界面
+def blur_pixmap(pixmap: QPixmap, radius: float) -> QPixmap:
+    """对 QPixmap 进行高斯模糊"""
+    if pixmap.isNull():
+        return pixmap
+    scene = QGraphicsScene()
+    item = QGraphicsPixmapItem(pixmap)
+    effect = QGraphicsBlurEffect()
+    effect.setBlurRadius(radius)
+    item.setGraphicsEffect(effect)
+    scene.addItem(item)
+    result = QPixmap(pixmap.size())
+    result.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(result)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    scene.render(painter, QRectF(result.rect()), QRectF(pixmap.rect()))
+    painter.end()
+    return result
+
+
+def parse_yaml_response(raw: str) -> dict:
+    """解析 AI 返回的 YAML 内容"""
+    result = {"scene": "", "content": raw, "option1": "", "option2": ""}
+    try:
+        # 若带思维链则先剥离，避免 YAML 解析失败
+        if raw.startswith(COT_OPEN) and COT_SPLIT in raw:
+            raw = raw.split(COT_SPLIT, 1)[1]
+
+        clean = re.sub(r'```(?:yaml)?\s*|\s*```', '', raw).strip()
+        data = yaml.safe_load(clean)
+        if isinstance(data, dict):
+            result["scene"] = str(data.get("scene") or "")
+            result["content"] = str(data.get("content") or raw)
+            result["option1"] = str(data.get("option1") or "")
+            result["option2"] = str(data.get("option2") or "")
+    except Exception:
+        pass
+    result["content"] = re.sub(r'[（(][^）)]*\.gif[）)]', '', result["content"]).strip()
+    return result
+
+
+class SceneRenderer:
+    """场景渲染器"""
+    # 合成 背景(scene) + 立绘(Doll)
+    def __init__(self, bg_path: str, char_path: str):
+        self.bg_pixmap = QPixmap(bg_path)  # 背景层：scene
+        self.char_pixmap = QPixmap(char_path)  # 立绘层：Doll
+
+
+    def set_background(self, bg_path: str) -> bool:
+        """切换背景图；成功返回 True"""
+        pixmap = QPixmap(bg_path)
+        if pixmap.isNull():
+            return False
+        self.bg_pixmap = pixmap
+        return True
+
+
+    def render(self, width: int, height: int) -> QPixmap:
+        """渲染背景与立绘"""
+        # 渲染顺序：先背景(scene)，再立绘(Doll)
+        canvas = QPixmap(width, height)
+        canvas.fill(Qt.GlobalColor.black)
+        painter = QPainter(canvas)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+
+        # 背景：进行等比缩放并居中裁剪
+        if not self.bg_pixmap.isNull():
+            scaled_bg = self.bg_pixmap.scaled(
+                width, height,
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            x = (width - scaled_bg.width()) // 2
+            y = (height - scaled_bg.height()) // 2
+            painter.drawPixmap(x, y, scaled_bg)
+
+        # 立绘：底部居中
+        if not self.char_pixmap.isNull():
+            target_h = int(height * 0.75 * 1.10)
+            scaled_char = self.char_pixmap.scaledToHeight(
+                target_h, Qt.TransformationMode.SmoothTransformation
+            )
+            cx = (width - scaled_char.width()) // 2
+            cy = height - scaled_char.height()
+            painter.drawPixmap(cx, cy, scaled_char)
+
+        painter.end()
+        return canvas
+
+
+class GlassDialog(QWidget):
+    """特殊毛玻璃对话框"""
+    # 渲染AI 回复界面、用户回复界面、思考动画、选项与输入
+    clicked_advance = pyqtSignal()
+    option_selected = pyqtSignal(str)
+    return_to_ai_display = pyqtSignal()
+
+    # 统一渲染样式：
+    # - 板块样式：无色100%透明、圆角20、模糊半径10、级联模糊3次、1像素纯白色描边
+    # - 按钮样式：无色100%透明、圆角13、模糊半径10、级联模糊3次、1像素纯白色描边
+    # - 字体样式：黑色、字号14
+    CORNER_RADIUS = 20
+    BLUR_RADIUS = 10
+    BLUR_CASCADE = 3
+    TEXT_SIZE = 14
+    SCENE_TEXT_SIZE = 11  # 场景小字号特殊处理
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setMouseTracking(True)
+        self._state = "ai_display"
+        self._options = ("", "")
+        self._thinking_prefix = "思考中"
+        self._current_scene = ""  # 当前场景，供用户回复界面复用
+        self._blur_cache_key = None
+        self._blur_cache = None
+        self._build_ui()
+
+
+    def _build_ui(self):
+        """构建对话框 UI"""
+        # 渲染头部、分割线、内容区、选项、输入框
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 14, 24, 18)
+        layout.setSpacing(6)
+
+        # 头部容器：角色名 + 场景名
+        self.header_widget = QWidget()
+        header_layout = QVBoxLayout(self.header_widget)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(2)
+
+        self.name_label = QLabel("亚托莉")
+        self.name_label.setFont(QFont(FONT_FAMILY, self.TEXT_SIZE, QFont.Weight.Bold))
+        self.name_label.setStyleSheet("color: black; background: transparent;")
+
+        self.scene_label = QLabel("")
+        self.scene_label.setFont(QFont(FONT_FAMILY, self.SCENE_TEXT_SIZE))
+        self.scene_label.setStyleSheet("color: rgba(0,0,0,0.55); background: transparent;")
+
+        header_layout.addWidget(self.name_label)
+        header_layout.addWidget(self.scene_label)
+        layout.addWidget(self.header_widget)
+
+        # 分割线
+        divider = QFrame()
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setStyleSheet("background-color: rgba(0,0,0,0.3); border: none;")
+        divider.setFixedHeight(1)
+        layout.addWidget(divider)
+
+        # 内容区：消息、选项、输入框
+        self.content_widget = QWidget()
+        self.content_layout = QVBoxLayout(self.content_widget)
+        self.content_layout.setContentsMargins(0, 6, 0, 0)
+        self.content_layout.setSpacing(8)
+        layout.addWidget(self.content_widget, 1)
+
+        # AI 消息文本
+        self.msg_label = QLabel()
+        self.msg_label.setWordWrap(True)
+        self.msg_label.setFont(QFont(FONT_FAMILY, self.TEXT_SIZE))
+        self.msg_label.setStyleSheet("color: black; background: transparent;")
+        self.msg_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.content_layout.addWidget(self.msg_label)
+
+        # 用户选项：两个选项(option) + 自定义输入入口
+        self.opt1_label = QLabel()
+        self.opt2_label = QLabel()
+        self.custom_label = QLabel("我想说……")
+        for lab in (self.opt1_label, self.opt2_label, self.custom_label):
+            lab.setFont(QFont(FONT_FAMILY, self.TEXT_SIZE))
+            lab.setStyleSheet(
+                "color: black; background: rgba(255,255,255,0.25);"
+                "padding: 8px 12px; border-radius: 8px;"
+            )
+            lab.setCursor(Qt.CursorShape.PointingHandCursor)
+            lab.hide()
+        self.opt1_label.mousePressEvent = lambda _: self._emit_option(0)
+        self.opt2_label.mousePressEvent = lambda _: self._emit_option(1)
+        self.custom_label.mousePressEvent = lambda _: self._switch_to_input()
+        self.content_layout.addWidget(self.opt1_label)
+        self.content_layout.addWidget(self.opt2_label)
+        self.content_layout.addWidget(self.custom_label)
+
+        # 自定义输入框
+        self.input_edit = QTextEdit()
+        self.input_edit.setPlaceholderText("请输入文本")
+        self.input_edit.setFont(QFont(FONT_FAMILY, self.TEXT_SIZE))
+        self.input_edit.setStyleSheet(
+            f'QTextEdit {{ background: transparent; border: none; '
+            f'color: black; font-family: "{FONT_FAMILY}"; font-size: {self.TEXT_SIZE}pt; }}'
+        )
+        self.input_edit.setMaximumHeight(90)
+        self.input_edit.hide()
+        self.content_layout.addWidget(self.input_edit)
+
+        # 思考动画定时器
+        self._thinking_timer = QTimer(self)
+        self._thinking_timer.timeout.connect(self._update_thinking_animation)
+        self._thinking_dots = 0
+
+
+    def _set_state(self, state, *, name, align, msg_visible=False,
+                   options_visible=False, input_visible=False, scene=None):
+        """统一切换对话框状态"""
+        self.stop_thinking()
+        self._state = state
+        self.name_label.setText(name)
+        self.name_label.setAlignment(align)
+        # 场景标签与名字标签使用同一对齐方式：AI 左对齐，用户右对齐
+        self.scene_label.setAlignment(align)
+        if not scene:
+            self.scene_label.hide()
+        else:
+            self.scene_label.setText(scene)
+            self.scene_label.show()
+        self.msg_label.setVisible(msg_visible)
+        self.opt1_label.setVisible(options_visible)
+        self.opt2_label.setVisible(options_visible)
+        self.custom_label.setVisible(options_visible)
+        self.input_edit.setVisible(input_visible)
+        self.update()
+
+
+    def show_ai_message(self, content: str, scene: str = ""):
+        """显示AI消息"""
+        # AI回复界面
+        self._current_scene = scene or self._current_scene
+        self._set_state(
+            "ai_display",
+            name="亚托莉",
+            align=Qt.AlignmentFlag.AlignLeft,
+            msg_visible=True,
+            scene=scene,
+        )
+        self.msg_label.setText(content)
+
+
+    def show_options(self, opt1: str, opt2: str):
+        """用户回复界面"""
+        # 显示选项并同步AI阶段的"scene"
+        self._options = (opt1, opt2)
+        self.opt1_label.setText(opt1)
+        self.opt2_label.setText(opt2)
+        self._set_state(
+            "opt_display",
+            name="我",
+            align=Qt.AlignmentFlag.AlignRight,
+            options_visible=True,
+            scene=self._current_scene,
+        )
+
+
+    def _switch_to_input(self):
+        """切换输入状态"""
+        # 显示输入框并显示"scene"
+        self._set_state(
+            "input",
+            name="我",
+            align=Qt.AlignmentFlag.AlignRight,
+            input_visible=True,
+            scene=self._current_scene,
+        )
+        self.input_edit.setFocus()
+
+
+    def show_thinking(self, scene: str = "", prefix: str = "思考中"):
+        """思考阶段动画"""
+        if scene:
+            self._current_scene = scene
+        self._thinking_prefix = prefix
+        self._set_state(
+            "thinking",
+            name="亚托莉",
+            align=Qt.AlignmentFlag.AlignLeft,
+            msg_visible=True,
+            scene=scene or self._current_scene,
+        )
+        self.msg_label.setText(f"（{prefix}……）")
+        self._thinking_dots = 0
+        self._thinking_timer.start(300)
+
+
+    def show_summarizing(self, scene: str = ""):
+        """整理记忆动画"""
+        self.show_thinking(scene, prefix="正在整理记忆")
+
+
+    def stop_thinking(self):
+        """停止思考动画"""
+        if hasattr(self, "_thinking_timer"):
+            self._thinking_timer.stop()
+
+
+    def _update_thinking_animation(self):
+        """更新思考动画的省略号数量"""
+        self._thinking_dots = (self._thinking_dots + 1) % 7
+        dots = "." * self._thinking_dots
+        self.msg_label.setText(f"（{self._thinking_prefix}{dots}）")
+        self.update()
+
+
+    def _emit_option(self, idx: int):
+        """发出选项选择信号"""
+        self.option_selected.emit(self._options[idx])
+
+
+    def get_input_text(self) -> str:
+        """获取输入框文本"""
+        return self.input_edit.toPlainText().strip()
+
+
+    def clear_input(self):
+        """清空输入框"""
+        self.input_edit.clear()
+
+
+    def keyPressEvent(self, event):
+        """处理按键事件"""
+        # ESC 从用户回复界面返回 AI 显示
+        if event.key() == Qt.Key.Key_Escape and self._state in ("opt_display", "input"):
+            self.return_to_ai_display.emit()
+        else:
+            super().keyPressEvent(event)
+
+
+    def mousePressEvent(self, event):
+        """处理鼠标点击事件"""
+        # AI显示状态下，左键点击推进到用户回复界面
+        if event.button() == Qt.MouseButton.LeftButton and self._state == "ai_display":
+            self.clicked_advance.emit()
+        super().mousePressEvent(event)
+
+
+    def paintEvent(self, event):
+        """绘制特殊玻璃对话框"""
+        # 从主窗口场景截取并模糊
+        window = self.window()
+        scene_pixmap = getattr(window, "_scene_composite", None)
+        if scene_pixmap is None or scene_pixmap.isNull():
+            super().paintEvent(event)
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        pos = self.mapTo(window, QPoint(0, 0))
+        margin = 2
+        rx = max(0, pos.x() - margin)
+        ry = max(0, pos.y() - margin)
+        rw = min(scene_pixmap.width() - rx, self.width() + margin * 2)
+        rh = min(scene_pixmap.height() - ry, self.height() + margin * 2)
+
+        # 模糊缓存：场景、位置、尺寸不变时直接复用
+        key = (scene_pixmap.cacheKey(), int(rx), int(ry), int(rw), int(rh))
+        if self._blur_cache_key == key and self._blur_cache is not None:
+            region = self._blur_cache
+        else:
+            region = scene_pixmap.copy(int(rx), int(ry), int(rw), int(rh))
+            for _ in range(self.BLUR_CASCADE):
+                region = blur_pixmap(region, self.BLUR_RADIUS)
+            self._blur_cache_key = key
+            self._blur_cache = region
+
+        # 圆角裁剪并绘制模糊背景
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), self.CORNER_RADIUS, self.CORNER_RADIUS)
+        painter.setClipPath(path)
+        painter.drawPixmap(-margin, -margin, region)
+
+        # 玻璃边框
+        painter.setClipping(False)
+        painter.setPen(QPen(QColor(255, 255, 255), 1))
+        painter.drawRoundedRect(QRectF(self.rect()), self.CORNER_RADIUS, self.CORNER_RADIUS)
+        super().paintEvent(event)
+
+
+class ContextMask(QWidget):
+    """初始化上下文遮罩"""
+    # 半透明黑底，滚动显示历史消息
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.hide()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(60, 60, 60, 60)
+
+        # 滚动区域：矩形容器，容纳历史消息
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("""
+            QScrollArea { background: transparent; border: none; }
+            QScrollArea > QWidget > QWidget { background: transparent; }
             QScrollBar:vertical {
-                background: rgba(255, 255, 255, 100);
-                width: 10px;
-                margin: 0px;
-                border-radius: 5px;
+                background: rgba(255,255,255,0.15);
+                width: 8px; border-radius: 4px;
             }
             QScrollBar::handle:vertical {
-                background: rgba(150, 150, 150, 150);
-                border-radius: 5px;
-                min-height: 20px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: rgba(120, 120, 120, 200);
+                background: rgba(255,255,255,0.5);
+                border-radius: 4px; min-height: 30px;
             }
         """)
-        
-        # 创建聊天容器
-        self.chat_container = QWidget()
-        self.chat_container.setStyleSheet("background: transparent;")
-        self.chat_layout = QVBoxLayout(self.chat_container)
-        self.chat_layout.setAlignment(Qt.AlignTop)
-        self.chat_layout.setSpacing(5)
-        self.chat_layout.setContentsMargins(10, 10, 10, 10)
-        
-        scroll_area.setWidget(self.chat_container)
-        chat_area_layout.addWidget(scroll_area)
-        main_layout.addWidget(chat_area_container, 1)
-        
-        # 保存滚动区域引用以便后续使用
-        self.scroll_area = scroll_area
+        self.content = QWidget()
+        self.content.setStyleSheet("background: transparent;")
+        self.content_layout = QVBoxLayout(self.content)
+        self.content_layout.setSpacing(14)
+        self.content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        scroll.setWidget(self.content)
+        layout.addWidget(scroll)
 
-    def create_input_area(self, main_layout):
-        """创建输入区域"""
-        # 添加分割线
-        input_divider = QFrame()
-        input_divider.setFrameShape(QFrame.HLine)
-        input_divider.setFrameShadow(QFrame.Sunken)
-        input_divider.setStyleSheet("background-color: rgba(196, 196, 196, 150);")
-        input_divider.setFixedHeight(1)
-        main_layout.addWidget(input_divider)
-        
-        # 输入区域容器（使用更强的模糊效果）
-        input_container = FrostedGlassWidget(blur_radius=12, opacity=0.9)
-        input_layout = QVBoxLayout(input_container)
-        input_layout.setContentsMargins(15, 15, 15, 15)
-        
-        # 文本框
-        self.input_field = QTextEdit()
-        self.input_field.setPlaceholderText("请输入文本（Ctrl+Enter发送）")
-        self.input_field.setFont(QFont("Microsoft YaHei", 12))
-        self.input_field.setMaximumHeight(100)
-        self.input_field.setStyleSheet("""
-            QTextEdit {
-                background: rgba(255, 255, 255, 200);
-                border: 1px solid rgba(200, 200, 200, 150);
-                border-radius: 8px;
-                padding: 8px;
-            }
-            QTextEdit:focus {
-                border: 1px solid rgba(0, 153, 255, 200);
-            }
-        """)
-        
-        # 添加快捷键支持
-        self.input_field.keyPressEvent = self.handle_key_press
-        input_layout.addWidget(self.input_field)
 
-        # 按钮状态
+    def update_history(self, history: list):
+        """更新上下文历史显示"""
+        # 清空旧控件
+        while self.content_layout.count():
+            item = self.content_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        for msg in history:
+            role = msg.get("role", "")
+            text = msg.get("content", "")
+            if role == "system":
+                continue
+            lab = QLabel()
+            lab.setWordWrap(True)
+            lab.setFont(QFont(FONT_FAMILY, 14))
+            if role == "user":
+                lab.setText(f"<b>我：</b>{text}")
+            else:
+                lab.setText(f"<b>亚托莉：</b>{text}")
+            lab.setStyleSheet("color: white; background: transparent;")
+            lab.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            self.content_layout.addWidget(lab)
+
+
+    def paintEvent(self, event):
+        """绘制半透明黑色遮罩"""
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 180))
+
+
+class VisualNovelFrontend(QMainWindow):
+    """初始化视觉小说前端"""
+    # 最底部背景(scene)、立绘(Doll)、毛玻璃对话框、上下文遮罩
+
+    def __init__(self, backend=None):
+        super().__init__()
+        self.backend = backend
+        self.setWindowTitle("ATRI_Chat · 视觉小说模式")
+        self.setFont(QFont(FONT_FAMILY, 14))
+        self.resize(1280, 720)
+        self.setMinimumSize(800, 450)
+
         self.ui_busy = False
-        
-        # 按钮区域
-        button_layout = QHBoxLayout()
-        button_layout.setContentsMargins(0, 10, 0, 0)
-        
-        # 发送按钮
-        self.send_button = QPushButton("发送")
-        self.send_button.setFont(QFont("Microsoft YaHei", 12))
-        self.send_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(0, 153, 255, 200);
-                color: white;
-                border-radius: 8px;
-                padding: 6px 12px;
-                border: none;
-            }
-            QPushButton:hover {
-                background-color: rgba(10, 103, 165, 200);
-            }
-            QPushButton:disabled {
-                background-color: rgba(150, 150, 150, 150);
-            }
-        """)
-        self.send_button.clicked.connect(self.send_message)
-        
-        # 清除按钮
-        self.clear_button = QPushButton("清除记录")
-        self.clear_button.setFont(QFont("Microsoft YaHei", 12))
-        self.clear_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(244, 67, 54, 200);
-                color: white;
-                border-radius: 8px;
-                padding: 6px 12px;
-                border: none;
-            }
-            QPushButton:hover {
-                background-color: rgba(211, 47, 47, 200);
-            }
-        """)
-        self.clear_button.clicked.connect(self.clear_chat)
-        
-        # 退出按钮
-        self.exit_button = QPushButton("退出")
-        self.exit_button.setFont(QFont("Microsoft YaHei", 12))
-        self.exit_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(76, 175, 80, 200);
-                color: white;
-                border-radius: 8px;
-                padding: 6px 12px;
-                border: none;
-            }
-            QPushButton:hover {
-                background-color: rgba(69, 160, 73, 200);
-            }
-            QPushButton:disabled {
-                background-color: rgba(150, 150, 150, 150);
-            }
-        """)
-        self.exit_button.clicked.connect(self.trigger_exit)
+        self._current_ai_response = ""
+        self.frontend_history: list[dict] = []
+        self._pending_options = ("", "")
+        self._workers = []  # 持有后台线程/Worker，防止被 GC
 
-        # 删除按钮
-        self.delete_button = QPushButton("删除")
-        self.delete_button.setFont(QFont("Microsoft YaHei", 12))
-        self.delete_button.setStyleSheet("""
-            QPushButton {
-                background-color: rgba(255, 152, 0, 200);
-                color: white;
-                border-radius: 8px;
-                padding: 6px 12px;
-                border: none;
-            }
-            QPushButton:hover {
-                background-color: rgba(245, 124, 0, 200);
-            }
-        """)
-        self.delete_button.clicked.connect(self.delete_last_conversation)
-
-        # 添加按钮到布局
-        button_layout.addWidget(self.exit_button)
-        button_layout.addWidget(self.delete_button)
-        button_layout.addStretch()
-        button_layout.addWidget(self.send_button)
-        button_layout.addWidget(self.clear_button)
-        
-        input_layout.addLayout(button_layout)
-        main_layout.addWidget(input_container)
-
-    def initialize_services(self):
-        """初始化后端服务和其他组件"""
+        # 场景索引
+        self.scene_index = {}
         try:
-            self.backend_service = BackendService()
-            self.frontend_history = self.backend_service.backend_history
+            for f in os.listdir(SCENE_DIR):
+                if f.lower().endswith(".png"):
+                    stem = os.path.splitext(f)[0]
+                    self.scene_index[stem] = os.path.join(SCENE_DIR, f)
         except Exception as e:
-            print(f"错误| 后端服务初始化失败: {str(e)}")
-            self.frontend_history = []
+            logger.warning(f"构建场景索引失败: {e}")
 
-        self.pending_exit = False
-        
-        # 初始化工作线程相关变量
-        self.ai_thread = None
-        self.ai_worker = None
-        self.play_thread = None
-        self.play_worker = None
-        
-        if hasattr(self, 'backend_service'):
-            # 遍历后端历史显示到前端
-            for msg in self.backend_service.backend_history:
-                role = msg.get("role")
-                content = msg.get("content", "")
+        # 提取上一段对话的"scene"
+        self._current_scene = self._get_last_scene() or SCENE_FALLBACK_NAME
 
-                # 排除总结请求
-                if role == "user" and content.startswith("<OOC："):
-                    continue
+        # 场景渲染器：背景(scene) + 立绘(Doll)
+        self.scene_renderer = SceneRenderer(
+            bg_path=DEFAULT_BG_PATH,
+            char_path=DEFAULT_CHAR_PATH,
+        )
+        self._scene_composite = QPixmap()
 
-                # 显示用户消息
-                if role == "user":
-                    self.add_user_message(content)
-                
-                # 显示AI回复
-                elif role == "assistant":
-                    # 分离思维链和最终回复
-                    display_content = content
-                    if content.startswith("【") and "】\n\n" in content:
-                        parts = content.split("】\n\n", 1)
-                        if len(parts) > 1:
-                            display_content = parts[1]  # 只取最终回复部分
-                    
-                    is_opening_line = (msg == self.backend_service.backend_history[-1])
-                    if not is_opening_line:
-                        self.add_ai_message(display_content)
-            
-            # 在开场白之前添加欢迎消息
-            self.add_system_message("以下是新的消息")
-            
-            # 添加AI开场白并播放
-            opening_line = self.backend_service.get_opening_line()
-            self.add_ai_message(opening_line)
-            
-            self.set_ui_busy(True)
+        # 布局防抖定时器
+        self._layout_timer = QTimer(self)
+        self._layout_timer.setSingleShot(True)
+        self._layout_timer.setInterval(30)
+        self._layout_timer.timeout.connect(self._update_layout)
 
-            # 创建播放开场白的工作线程
-            self.play_worker = PlayWorker(self.backend_service, opening_line)
-            self.play_thread = QThread()
-            self.play_worker.moveToThread(self.play_thread)
+        self._build_ui()
+        self._setup_shortcuts()
 
-            # 连接信号
-            self.play_thread.started.connect(self.play_worker.run)
-            self.play_worker.play_finished.connect(self.handle_play_finished)
-            self.play_worker.play_finished.connect(self.play_thread.quit)
-            self.play_thread.finished.connect(self.play_thread.deleteLater)
-
-            # 启动线程
-            self.play_thread.start()
-
-            # 延迟调用滚动到底部
-            QTimer.singleShot(100, self.scroll_to_bottom)
-        
-        # 设置焦点到输入框
-        self.input_field.setFocus()
-
-    def delete_last_conversation(self):
-        """删除最后一轮对话"""
-        if self.ui_busy:
-            self.add_system_message("请等待当前操作完成")
-            return
-            
-        if not hasattr(self, 'backend_service'):
-            self.add_system_message("后端服务未初始化")
-            return
-            
-        # 从后端删除对话
-        deleted_count = self.backend_service.delete_last_conversation_pair()
-        
-        if deleted_count == 0:
-            self.add_system_message("没有可删除的对话")
-            return
-            
-        # 从前端界面删除气泡
-        self.remove_last_conversation_bubbles()
-        
-        self.add_system_message(f"已删除最后一轮对话")
-
-    def remove_last_conversation_bubbles(self):
-        """从前端界面删除最后一轮对话的气泡"""
-        # 从布局末尾开始查找并删除用户和AI消息气泡
-        ai_bubble_found = False
-        user_bubble_found = False
-        
-        # 从后往前遍历布局中的子控件
-        for i in range(self.chat_layout.count() - 1, -1, -1):
-            widget = self.chat_layout.itemAt(i).widget()
-            if widget is None:
-                continue
-                
-            # 查找包含气泡标签的容器
-            container_layout = widget.layout()
-            if container_layout is None:
-                continue
-                
-            # 查找气泡标签
-            for j in range(container_layout.count()):
-                child_widget = container_layout.itemAt(j).widget()
-                if isinstance(child_widget, BubbleLabel) and not child_widget.is_system:
-                    if not ai_bubble_found and not child_widget.is_user:
-                        # 找到AI气泡，删除整个容器
-                        widget.deleteLater()
-                        ai_bubble_found = True
-                        break
-                    elif not user_bubble_found and child_widget.is_user:
-                        # 找到用户气泡，删除整个容器
-                        widget.deleteLater()
-                        user_bubble_found = True
-                        break
-            
-            # 如果已经找到AI和用户气泡，停止搜索
-            if ai_bubble_found and user_bubble_found:
-                break
-
-    def trigger_exit(self):
-        """主动触发退出流程"""
-        self.add_system_message("正在退出……")
-        if hasattr(self, 'backend_service'):
-            # 手动触发退出，需要总结
-            self.backend_service.handle_exit_detection()
-        # 延迟2秒退出
-        QTimer.singleShot(2000, QApplication.instance().quit)
-
-    def set_ui_busy(self, busy=True):
-        """设置界面按钮状态"""
-        # 更新状态标志
-        self.ui_busy = busy
-        
-        # False禁用，True启用
-        if busy:
-            self.send_button.setEnabled(False)
-            self.send_button.setText("回复中……")
-            self.exit_button.setEnabled(False)
-            self.exit_button.setText("请稍等……")
+        if self.backend is None:
+            # 后端尚未就绪时，先展示思考阶段动画，并尝试切换到上一段对话的场景
+            self.dialog.show_thinking(self._current_scene, prefix="思考中")
+            QTimer.singleShot(120, lambda: self._apply_scene_background(self._current_scene))
         else:
-            self.send_button.setEnabled(True)
-            self.send_button.setText("发送")
-            self.exit_button.setEnabled(True)
-            self.exit_button.setText("退出")
+            self._show_opening()
 
-    def handle_play_finished(self):
-        """处理播放完成"""
-        # 检查是否有待处理的退出
-        if self.pending_exit:
-            self.pending_exit = False
-            self.add_system_message("正在退出……")
-            # 直接退出，不调用总结，因为AI触发时已经总结过了
-            QTimer.singleShot(2000, QApplication.instance().quit)
+        QTimer.singleShot(80, self._update_layout)
+
+
+    def _build_ui(self):
+        """构建前端UI"""
+        # 中央透明容器 + 毛玻璃对话框 + 上下文遮罩
+        central = QWidget()
+        central.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        central.setAutoFillBackground(False)
+        self.setCentralWidget(central)
+
+        self.dialog = GlassDialog(central)
+        self.dialog.clicked_advance.connect(self._on_advance)
+        self.dialog.option_selected.connect(self._on_option_select)
+        self.dialog.return_to_ai_display.connect(self._on_esc_return)
+
+        self.context_mask = ContextMask(self)
+
+
+    def _setup_shortcuts(self):
+        """设置快捷键"""
+        # Ctrl+Enter 发送
+        # Ctrl+/ 切换上下文
+        QShortcut(
+            QKeySequence(Qt.Key.Key_Return | Qt.KeyboardModifier.ControlModifier),
+            self, activated=self._send_message
+        )
+        QShortcut(
+            QKeySequence(Qt.Key.Key_Slash | Qt.KeyboardModifier.ControlModifier),
+            self, activated=self._toggle_context
+        )
+
+
+    def _run_worker(self, fn, on_success, on_failed=None, *args, **kwargs):
+        """统一创建后台线程任务，并持有引用防止 GC"""
+        worker = Worker(fn, *args, **kwargs)
+        thread = QThread()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(on_success)
+        if on_failed:
+            worker.failed.connect(on_failed)
         else:
-            # 调用`设置界面按钮状态`
-            self.set_ui_busy(False)
+            worker.failed.connect(lambda err: logger.error(err))
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(thread.deleteLater)
 
-    def handle_key_press(self, event):
-        """处理输入框快捷键"""
-        # 如果界面处于忙碌状态，忽略快捷键
-        if self.ui_busy:
-            # 但仍允许默认的文本输入处理
-            QTextEdit.keyPressEvent(self.input_field, event)
-            return
-        
-        # 检查按下Ctrl+Enter后发送信息
-        if event.key() == Qt.Key_Return and event.modifiers() == Qt.ControlModifier:
-            self.send_message()
-            return
-        # 允许默认处理其他按键
-        QTextEdit.keyPressEvent(self.input_field, event)
+        self._workers.append((worker, thread))
 
-    def send_message(self):
-        """处理用户发送消息"""
-        # 如果界面忙碌，直接返回
-        if self.ui_busy:
-            return
-            
-        user_input = self.input_field.toPlainText().strip()
-        # 忽略空消息
-        if not user_input:
-            return
-            
-        # 显示用户消息
-        self.add_user_message(user_input)
-        
-        # 清空输入框并重置焦点
-        self.input_field.clear()
-        self.input_field.setFocus()
-        
-        # 调用`设置界面按钮状态`
-        self.set_ui_busy(True)
-        
-        # 创建AI工作线程
-        self.ai_worker = AIWorker(self.backend_service, user_input)
-        self.ai_thread = QThread()
-        self.ai_worker.moveToThread(self.ai_thread)
-        
-        # 连接信号
-        self.ai_thread.started.connect(self.ai_worker.run)
-        self.ai_worker.response_received.connect(self.handle_ai_response)
-        self.ai_worker.error_occurred.connect(self.handle_ai_error)
-        self.ai_worker.response_received.connect(self.ai_thread.quit)
-        self.ai_worker.error_occurred.connect(self.ai_thread.quit)
-        self.ai_thread.finished.connect(self.ai_thread.deleteLater)
-        
-        # 启动线程
-        self.ai_thread.start()
+        def cleanup():
+            try:
+                self._workers.remove((worker, thread))
+            except ValueError:
+                pass
 
-    def handle_ai_response(self, ai_response, should_exit):
-        """处理AI回复"""
-        # 调用`添加AI消息`
-        self.add_ai_message(ai_response)
-        
-        # 添加到前端历史
-        self.frontend_history.append({
-            "role": "assistant",
-            "content": ai_response
-        })
+        thread.finished.connect(cleanup)
+        thread.start()
+        return worker, thread
 
-        # 如果需要退出，标记待处理
+
+    def _get_last_scene(self) -> str:
+        """从短期记忆文件里最后一条 assistant 消息中解析 scene"""
+        try:
+            if not os.path.exists(SHORT_TERM_MEMORY_FILE):
+                return ""
+            with open(SHORT_TERM_MEMORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if not isinstance(data, list):
+                return ""
+            for msg in reversed(data):
+                if msg.get("role") == "assistant":
+                    parsed = parse_yaml_response(msg.get("content", ""))
+                    if parsed["scene"]:
+                        return parsed["scene"]
+        except Exception as e:
+            logger.warning(f"提取上一段对话场景失败: {e}")
+        return ""
+
+
+    def on_backend_ready(self, backend):
+        """后端初始化完成后调用"""
+        self.backend = backend
+        self._show_opening()
+
+
+    def on_backend_failed(self, err: str):
+        """后端初始化失败回调"""
+        self.dialog.show_ai_message(f"后端加载失败：{err}", self._current_scene)
+        self.ui_busy = False
+
+
+    def _apply_scene_background(self, scene_name: str) -> None:
+        """根据 scene 字段切换背景"""
+        # 解析失败或文件不存在时不切换
+        if not scene_name:
+            return
+        scene_name = os.path.splitext(scene_name)[0]  # 去掉扩展名
+        path = self.scene_index.get(scene_name)
+        if path and self.scene_renderer.set_background(path):
+            self._update_layout()
+            logger.info(f"场景已切换: {scene_name}")
+        else:
+            logger.warning(f"未找到匹配的场景文件: {scene_name}.png")
+
+
+    def _apply_ai_response(self, response: str):
+        """应用 AI 回复到界面"""
+        # 解析 scene、content、选项
+        parsed = parse_yaml_response(response)
+        if parsed["scene"]:
+            self._current_scene = parsed["scene"]
+            self._apply_scene_background(parsed["scene"])
+        self.dialog.show_ai_message(parsed["content"], self._current_scene)
+        self._pending_options = (parsed["option1"], parsed["option2"])
+        self._current_ai_response = response
+
+
+    def _show_opening(self):
+        """显示开场白"""
+        if not self.backend:
+            self.dialog.show_ai_message("……", self._current_scene)
+            return
+        opening = self.backend.get_opening_line()
+        self.frontend_history.append({"role": "assistant", "content": opening})
+        self._apply_ai_response(opening)
+
+
+    def _on_advance(self):
+        """处理点击推进"""
+        # AI 显示界面点击推进，有选项则显示选项，否则切到输入
+        opt1, opt2 = getattr(self, "_pending_options", ("", ""))
+        if opt1 or opt2:
+            self.dialog.show_options(opt1, opt2)
+        else:
+            self.dialog._switch_to_input()
+
+
+    def _on_option_select(self, text: str):
+        """处理选项选择"""
+        self.dialog.input_edit.setPlainText(text)
+        self._send_message()
+
+
+    def _on_esc_return(self):
+        """按 ESC 返回 AI 显示界面"""
+        if self._current_ai_response:
+            parsed = parse_yaml_response(self._current_ai_response)
+            self.dialog.show_ai_message(parsed["content"], self._current_scene)
+
+
+    def _handle_command(self, text: str):
+        """处理斜杠指令"""
+        # "/exit"退出并总结
+        cmd = text.strip().lower()
+        if cmd == "/exit":
+            if self.ui_busy:
+                return
+            self.ui_busy = True
+            self.dialog.show_summarizing(self._current_scene)
+            self._run_worker(
+                self.backend.trigger_exit_summary,
+                lambda _: self._on_summary_done(),
+                lambda err: self._on_ai_error(f"总结失败: {err}")
+            )
+        else:
+            self.dialog.show_ai_message(f"未知指令：{text}", self._current_scene)
+
+
+    def _on_summary_done(self):
+        """总结完成回调"""
+        self.ui_busy = False
+        self.dialog.show_ai_message("记忆整理完成，再见～", self._current_scene)
+        QTimer.singleShot(1500, QApplication.instance().quit)
+
+
+    def _send_message(self):
+        """发送用户消息"""
+        text = self.dialog.get_input_text()
+        if not text or self.ui_busy:
+            return
+
+        if text.startswith("/"):
+            self.dialog.clear_input()
+            self._handle_command(text)
+            return
+
+        self.frontend_history.append({"role": "user", "content": text})
+        self.dialog.clear_input()
+        self.ui_busy = True
+
+        thinking_prefix = "思考中"
+        if self.backend and getattr(self.backend, "cfg", None):
+            model_name = str(getattr(self.backend.cfg, "model", "")).lower()
+            # 大肥鱼彩蛋
+            if "deepseek" in model_name and random.randint(1, 20) == 1:
+                thinking_prefix = "🐳海底级思考中"
+        self.dialog.show_thinking(self._current_scene, prefix=thinking_prefix)
+
+        self._run_worker(
+            self.backend.process_user_message,
+            self._on_ai_response,
+            self._on_ai_error,
+            text,
+            False,  # play_tts=False，TTS 由前端单独线程播放
+        )
+
+
+    def _on_ai_response(self, result):
+        """处理 AI 回复"""
+        response, should_exit = result
+        self.frontend_history.append({"role": "assistant", "content": response})
+        self._apply_ai_response(response)
+        self.ui_busy = False
+        self._start_tts(response)
         if should_exit:
-            self.pending_exit = True
-        
-        # 开始播放音频
-        self._start_play_thread(ai_response, self.handle_play_finished)
-        
-    def _start_play_thread(self, ai_response, finished_callback):
-        """TTS和播放的工作线程"""
-        # 创建TTS和播放的工作线程
-        self.play_worker = PlayWorker(self.backend_service, ai_response)
-        self.play_thread = QThread()
-        self.play_worker.moveToThread(self.play_thread)
+            QTimer.singleShot(2000, QApplication.instance().quit)
 
-        # 连接信号
-        self.play_thread.started.connect(self.play_worker.run)
-        self.play_worker.play_finished.connect(finished_callback)
-        self.play_worker.play_finished.connect(self.play_thread.quit)
-        self.play_thread.finished.connect(self.play_thread.deleteLater)
 
-        # 启动线程
-        self.play_thread.start()
+    def _on_ai_error(self, err: str):
+        """处理 AI 错误"""
+        self.dialog.show_ai_message(err, self._current_scene)
+        self.ui_busy = False
 
-    def handle_ai_error(self, error_msg):
-        """处理AI请求错误"""
-        self.add_system_message(error_msg)
-        # 调用`设置界面按钮状态`
-        self.set_ui_busy(False)
 
-    def scroll_to_bottom(self):
-        """滚动到底部"""
-        try:
-            # 更新布局
-            self.chat_container.adjustSize()
-            self.chat_layout.update()
-            
-            # 等待布局绘制完成
-            QApplication.processEvents()
+    def _start_tts(self, text: str):
+        """启动 TTS 播放线程"""
+        if not self.backend or not getattr(self.backend, "tts_success", False):
+            return
+        self._run_worker(
+            self.backend.process_ai_response_tts,
+            lambda _: None,
+            lambda err: logger.error(f"TTS 播放失败: {err}"),
+            text
+        )
 
-            scroll_area = self.centralWidget().findChild(QScrollArea)
-            if scroll_area:
-                scrollbar = scroll_area.verticalScrollBar()
-                if scrollbar:
-                    scrollbar.setValue(scrollbar.maximum())
-                    QApplication.processEvents()
-        except Exception as e:
-             print(f"警告| 滚动到底部失败: {e}")
-                
-    def add_user_message(self, message):
-        """添加用户消息"""
-        container = QWidget()
-        container.setStyleSheet("background-color: transparent;")
-        container_layout = QHBoxLayout(container)
-        container_layout.setContentsMargins(50, 5, 10, 5)
 
-        # 添加弹性空间
-        container_layout.addStretch()
-        
-        # 添加气泡标签
-        bubble = BubbleLabel(message, is_user=True)
-        container_layout.addWidget(bubble)
-        
-        # 使用图片头像
-        avatar = AvatarLabel(is_user=True)
-        container_layout.addWidget(avatar)
-        
-        # 添加到聊天布局
-        self.chat_layout.addWidget(container)
-        
-        # 调用`滚动到底部`
-        self.scroll_to_bottom()
+    def _toggle_context(self):
+        """切换上下文面板"""
+        if self.context_mask.isVisible():
+            self.context_mask.hide()
+        else:
+            self.context_mask.update_history(self.frontend_history)
+            self.context_mask.show()
+            self.context_mask.raise_()
 
-    def add_ai_message(self, message):
-        """添加AI消息"""
-        container = QWidget()
-        container.setStyleSheet("background-color: transparent;")
-        container_layout = QHBoxLayout(container)
-        container_layout.setContentsMargins(10, 5, 50, 5)
-        
-        # 使用图片头像
-        avatar = AvatarLabel(is_user=False)
-        container_layout.addWidget(avatar)
-        
-        # 添加气泡标签
-        bubble = BubbleLabel(f"{message}")
-        container_layout.addWidget(bubble)
-        
-        # 添加弹性空间
-        container_layout.addStretch()
-        
-        # 添加到聊天布局
-        self.chat_layout.addWidget(container)
-        
-        # 调用`滚动到底部`
-        self.scroll_to_bottom()
 
-    def add_system_message(self, message):
-        """添加系统消息"""
-        container = QWidget()
-        container.setStyleSheet("background-color: transparent;")
-        container_layout = QHBoxLayout(container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
+    def resizeEvent(self, event):
+        """窗口大小变化"""
+        # 保持 16:9，并及时更新布局
+        size = event.size()
+        w, h = size.width(), size.height()
+        ratio = 16 / 9
+        if abs(w / h - ratio) > 0.01:
+            if w / h > ratio:
+                self.resize(int(h * ratio), h)
+            else:
+                self.resize(w, int(w / ratio))
+            return
+        self._update_layout()
+        super().resizeEvent(event)
 
-        # 添加弹性空间
-        container_layout.addStretch()
-        
-        # 创建气泡标签
-        bubble = BubbleLabel(message, is_system=True)
-        container_layout.addWidget(bubble)
-        container_layout.addStretch()
-        
-        # 添加到聊天布局
-        self.chat_layout.addWidget(container)
-        
-        # `调用滚动到底部`
-        self.scroll_to_bottom()
 
-    def clear_chat(self):
-        """清空聊天记录"""
-        if hasattr(self, 'backend_service'):
-            self.backend_service.backend_history = [
-                {"role": "system", "content": self.backend_service.system_prompt}
-            ]
-            self.frontend_history = self.backend_service.backend_history
-        
-        # 清空显示区域
-        for i in reversed(range(self.chat_layout.count())): 
-            widget = self.chat_layout.itemAt(i).widget()
-            if widget is not None:
-                widget.deleteLater()
-        
-        # 添加欢迎消息
-        self.add_system_message("聊天记录已清除，开始新的对话吧")
-        
-        # 保留AI开场白
-        if hasattr(self, 'backend_service'):
-            opening_line = self.backend_service.get_opening_line()
-            self.add_ai_message(opening_line)
+    def _update_layout(self):
+        """更新布局"""
+        w, h = self.width(), self.height()
 
-class AIWorker(QObject):
-    """处理AI请求的工作线程类"""
-    # AI回复信号和退出标志
-    response_received = pyqtSignal(str, bool)
-    # 错误信号
-    error_occurred = pyqtSignal(str)
+        # 背景(scene) + 立绘(Doll)
+        self._scene_composite = self.scene_renderer.render(w, h)
 
-    def __init__(self, backend_service, user_input):
-        super().__init__()
-        self.backend_service = backend_service
-        self.user_input = user_input
+        # 对话框：底部居中，宽 90%，高 32%
+        mx = int(w * 0.05)
+        mb = int(h * 0.03)
+        dw = w - mx * 2
+        dh = int(h * 0.32)
+        self.dialog.setGeometry(mx, h - mb - dh, dw, dh)
 
-    def run(self):
-        """在子线程中执行AI请求"""
-        try:
-            # 使用后端服务处理用户输入
-            ai_response, should_exit = self.backend_service.process_user_message(self.user_input, play_tts=False)
-            self.response_received.emit(ai_response, should_exit)
-            
-        except Exception as e:
-            # 处理异常并发送错误信号
-            self.error_occurred.emit(f"错误| AI请求出错: {str(e)}")
+        # 上下文遮罩：全屏
+        self.context_mask.setGeometry(0, 0, w, h)
 
-class PlayWorker(QObject):
-    """播放TTS的工作线程类"""
-    # 播放完成信号
-    play_finished = pyqtSignal()
+        # 及时重绘
+        self.update()
+        # 让对话框的模糊缓存失效并重绘
+        self.dialog.update()
 
-    def __init__(self, backend_service, ai_response):
-        super().__init__()
-        self.backend_service = backend_service
-        self.ai_response = ai_response
 
-    def run(self):
-        """在子线程中播放TTS"""
-        try:
-            # 调用`处理AI回复流程`
-            self.backend_service.process_ai_response(self.ai_response)
-            self.play_finished.emit()
-        except Exception as e:
-            print(f"错误| TTS播放失败: {str(e)}")
-            self.play_finished.emit()
+    def paintEvent(self, event):
+        """主窗口绘制"""
+        if not self._scene_composite.isNull():
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.drawPixmap(0, 0, self._scene_composite)
+        super().paintEvent(event)
 
 if __name__ == "__main__":
-    # 创建应用实例
     app = QApplication(sys.argv)
-    
-    # 设置应用样式
     app.setStyle("Fusion")
-    
-    # 设置全局字体
-    font = QFont("Microsoft YaHei", 12)
-    app.setFont(font)
-    
-    # 创建并显示主窗口
-    window = ChatWindow()
+    app.setFont(QFont(FONT_FAMILY, 14))
+
+    # 先显示 UI 并进入思考阶段，后端在后台线程初始化
+    window = VisualNovelFrontend(backend=None)
     window.show()
-    
-    # 启动事件循环
-    sys.exit(app.exec_())
+
+    init_thread = QThread()
+    init_worker = Worker(BackendService)
+    init_worker.moveToThread(init_thread)
+
+    init_thread.started.connect(init_worker.run)
+    init_worker.finished.connect(window.on_backend_ready)
+    init_worker.failed.connect(window.on_backend_failed)
+    init_worker.finished.connect(init_thread.quit)
+    init_worker.failed.connect(init_thread.quit)
+    init_thread.finished.connect(init_thread.deleteLater)
+
+    # 保持引用，避免被 GC
+    window._init_worker = init_worker
+    window._init_thread = init_thread
+
+    init_thread.start()
+
+    sys.exit(app.exec())
