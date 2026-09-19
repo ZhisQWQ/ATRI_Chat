@@ -1,0 +1,9 @@
+# 排除的目录/文件
+Data/Data\[1\].bin
+Develop/
+Memory_Core/
+venv/
+Backup_Data.json
+BackUP_Tool.py
+Short_Term_Memory.json
+Long_Term_Memory.json
