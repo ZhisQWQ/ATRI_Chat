@@ -2,13 +2,13 @@
 
 ## 项目说明  
 
-<img src="https://github.com/Therqwq/ATRI_Chat/blob/main/Show/Image[1].png" alt="image">  
+<img src="https://github.com/Therqwq/ATRI_Chat/blob/main/Show/Image_1.png" alt="image">  
 
 - 本项目是是一个AI对话系统，实现了TTS、翻译、AI对话的完整流程，同时正在逐步完善记忆系统  
 - 语音合成部分使用了GPT-SoVITS工具，其他所有组件均由本项目独立开发  
 - 项目素材取自网络、AI生成等，代码编写由Vide Coding完成  
 
-**使用说明和素材请移步至**：`https://www.bilibili.com/video/BV1pRhezaEjW/?spm_id_from=333.1387.homepage.video_card.click`  
+> 使用说明和素材请移步至：`https://www.bilibili.com/video/BV1pRhezaEjW/?spm_id_from=333.1387.homepage.video_card.click`
 
 ## 版权与法律声明  
 
@@ -26,7 +26,7 @@
 
 ### 项目代码版权声明  
 
-- 本项目除GPT-SoVITS相关组件外的所有代码采用MIT许可证发布  
+- 本项目除GPT-SoVITS相关组件外的所有代码采用MIT许可证发布，除加密模块之外的所有代码、资源完全开源  
 - MIT许可证唯一要求是包含原始版权声明和许可证  
 - 与GPL等copyleft许可证不同，MIT许可证不要求衍生作品采用相同的许可证  
 
@@ -68,8 +68,13 @@ pip install requests pygame-ce volcengine-python-sdk openai zai-sdk PyQt6 volcen
 5. 等待安装完成后，先运行设置以配置API：`python ./ATRI_Chat_Setting.py`，根据引导配置好聊天API和翻译API并设置好超级密码
 - 超级密码用于恢复配置，遗失超级密码你的密钥数据将丢失  
 6. 配置完成后，直接运行即可：`python ./ATRI_Chat.py`
-> 语音功能需要部署 GPT-Sovits，可以自行部署 Docker 即可 
+> 语音功能需要部署 GPT-Sovits，可以自行部署 Docker 即可
 
 ### Windows  
 
 - 与 Linux 步骤相同  
+
+## 下载  
+
+- 旁边的Release  
+- 夸克：`https://pan.quark.cn/s/e74c92ce1a79`  
